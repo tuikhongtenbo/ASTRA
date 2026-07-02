@@ -4,6 +4,7 @@ Pipeline — ASTRAPipeline tổng hợp 3 modules.
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Optional
 
@@ -454,6 +455,220 @@ class ASTRAPipeline:
             "t_preprocess": t_pre, "t_forward": t_fwd, "t_total": time.time() - t0,
             "modules_enabled": self.enable_modules,
         }
+
+    def run_v2(self, extraction_record: dict) -> dict:
+        """
+        ASTRA v2 pipeline — chạy từng module riêng biệt.
+
+        Đọc intermediate files từ step1 (m1_bbox/) và step2 (m2_depth/),
+        build prompt với prompt_v2, chạy ODV voting với 2 ảnh đầu vào.
+
+        Args:
+            extraction_record: dict từ test_objects_last.json
+
+        Returns:
+            dict với keys: id, predicted, correct, marks_ok, depth_ok,
+            votes, depth_o1, depth_o2, relation_text, prompt
+        """
+        import os
+        import random
+        from collections import Counter
+
+        from config.pipeline_config import (
+            M1_OUTPUT_DIR, M2_OUTPUT_DIR, N_PERMS,
+        )
+        from models.prompt_v2 import build_prompt
+
+        t0 = time.time()
+        sid = str(extraction_record.get("id", ""))
+
+        options = extraction_record.get("options", [])
+        answer = extraction_record.get("answer", "")
+        question = extraction_record.get("question", "")
+
+        # ── Load intermediate data ──────────────────────────────────────────
+        bbox_info_path = os.path.join(M1_OUTPUT_DIR, "bbox_info.json")
+        depth_info_path = os.path.join(M2_OUTPUT_DIR, "depth_info.json")
+
+        box_info = {}
+        if os.path.exists(bbox_info_path):
+            with open(bbox_info_path, "r", encoding="utf-8") as f:
+                all_boxes = json.load(f)
+            box_info = all_boxes.get(sid, {})
+
+        depth_info = {}
+        if os.path.exists(depth_info_path):
+            with open(depth_info_path, "r", encoding="utf-8") as f:
+                all_depth = json.load(f)
+            depth_info = all_depth.get(sid, {})
+
+        marks_ok = bool(box_info.get("marks_ok", False))
+        depth_ok = bool(depth_info.get("depth_ok", False))
+        depth_o1 = depth_info.get("depth_o1", 0.0) or 0.0
+        depth_o2 = depth_info.get("depth_o2", 0.0) or 0.0
+        relation_text = depth_info.get("relation_text", "")
+
+        # ── Load 2 ảnh ─────────────────────────────────────────────────────
+        img1_path = os.path.join(M1_OUTPUT_DIR, f"{sid}_bbox.jpg")
+        img2_path = os.path.join(M2_OUTPUT_DIR, f"{sid}_depth.jpg")
+
+        img1 = None
+        if os.path.exists(img1_path):
+            img1 = Image.open(img1_path).convert("RGB")
+
+        img2 = None
+        use_two_images = marks_ok and depth_ok and os.path.exists(img2_path)
+        if use_two_images:
+            img2 = Image.open(img2_path).convert("RGB")
+
+        # ── Build prompt ────────────────────────────────────────────────────
+        prompt_marks_ok = marks_ok and depth_ok
+        prompt = build_prompt(
+            record=extraction_record,
+            marks_ok=prompt_marks_ok,
+            depth_o1=depth_o1,
+            depth_o2=depth_o2,
+            options=options,
+        )
+
+        # ── ODV Voting ──────────────────────────────────────────────────────
+        perms = self._generate_permutations(options, self.n_perms)
+        votes = []
+        vote_outputs = []
+
+        for perm_opts in perms:
+            perm_prompt = build_prompt(
+                record=extraction_record,
+                marks_ok=prompt_marks_ok,
+                depth_o1=depth_o1,
+                depth_o2=depth_o2,
+                options=perm_opts,
+            )
+
+            if self.model is not None and img1 is not None:
+                output = self._generate_v2(img1, img2, perm_prompt)
+            else:
+                output = ""
+            vote_outputs.append(output)
+            parsed = self._parse_answer(output, perm_opts, options)
+            votes.append(parsed)
+
+        # Majority vote
+        valid = [v for v in votes if v is not None]
+        if valid:
+            counter = Counter(valid)
+            predicted = counter.most_common(1)[0][0]
+        else:
+            predicted = votes[0] if votes else (options[0] if options else "")
+
+        pred_norm = normalize_relation(predicted, options) or predicted or ""
+        ans_norm = normalize_relation(answer, options) or answer
+        correct = pred_norm.lower().strip() == ans_norm.lower().strip()
+
+        return {
+            "id": sid,
+            "question": question,
+            "options": options,
+            "answer": answer,
+            "predicted": pred_norm,
+            "correct": correct,
+            "marks_ok": marks_ok,
+            "depth_ok": depth_ok,
+            "depth_o1": depth_o1,
+            "depth_o2": depth_o2,
+            "relation_text": relation_text,
+            "votes": votes,
+            "vote_outputs": vote_outputs,
+            "prompt": prompt,
+            "two_images_used": use_two_images,
+            "t_total": time.time() - t0,
+        }
+
+    def _generate_permutations(self, options: list, n: int) -> list:
+        """Generate n permutations for ODV."""
+        perms = []
+        seen = set()
+        all_opts = list(options)
+        for _ in range(n * 3):
+            perm = all_opts.copy()
+            random.shuffle(perm)
+            key = tuple(perm)
+            if key not in seen:
+                seen.add(key)
+                perms.append(perm)
+            if len(perms) >= n:
+                break
+        if all_opts not in perms:
+            perms.insert(0, all_opts)
+        return perms[:n]
+
+    def _parse_answer(self, output: str, perm_opts: list, original_opts: list) -> str | None:
+        """Parse answer from VLM output."""
+        if not output:
+            return None
+        pred = normalize_relation(output, perm_opts)
+        if pred is None:
+            return None
+        idx = perm_opts.index(pred) if pred in perm_opts else -1
+        if idx >= 0 and idx < len(original_opts):
+            return original_opts[idx]
+        return pred
+
+    def _generate_v2(self, image1: Image.Image, image2: Image.Image | None, prompt: str) -> str:
+        """Generate với 1 hoặc 2 ảnh (ASTRA v2)."""
+        if image2 is not None:
+            images_for_vlm = [
+                {"role": "user", "content": [
+                    {"type": "image", "image": image1},
+                    {"type": "image", "image": image2},
+                    {"type": "text", "text": prompt},
+                ]}
+            ]
+        else:
+            images_for_vlm = [
+                {"role": "user", "content": [
+                    {"type": "image", "image": image1},
+                    {"type": "text", "text": prompt},
+                ]}
+            ]
+
+        try:
+            from qwen_vl_utils import process_vision_info
+            pv, ig, _ = process_vision_info(
+                {"image": image1} if image2 is None else {"image": [image1, image2]},
+                return_image_grid=True,
+            )
+        except Exception:
+            pv, ig = None, None
+
+        try:
+            inputs = self.processor(
+                text=images_for_vlm,
+                images=image1 if image2 is None else [image1, image2],
+                return_tensors="pt",
+                padding=True,
+            ).to(self.device)
+            if pv is not None and hasattr(pv, "to"):
+                inputs["pixel_values"] = pv.to(self.device)
+            if ig is not None and hasattr(ig, "to"):
+                inputs["image_grid"] = ig.to(self.device)
+        except Exception:
+            inputs = self.processor(
+                text=images_for_vlm,
+                images=image1,
+                return_tensors="pt",
+            ).to(self.device)
+
+        with torch.no_grad():
+            output_ids = self.model.generate(
+                **inputs,
+                max_new_tokens=self.max_new_tokens,
+                do_sample=False,
+            )
+        ilen = inputs["input_ids"].shape[1]
+        return self.processor.batch_decode(
+            output_ids[:, ilen:], skip_special_tokens=True
+        )[0].strip()
 
     def unload(self):
         for attr in ("model", "grounding_model", "depth_model"):
