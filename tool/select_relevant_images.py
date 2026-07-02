@@ -1,5 +1,6 @@
 import json
 import os
+import glob
 import shutil
 
 
@@ -25,15 +26,13 @@ def copy_images(jsonl_file, source_dir, destination_dir):
     print("Copy successful!")
 
 
-import glob
-
 # Lấy các file JSONL/JSON trong dataset/data/
 json_files = []
 json_files.extend(glob.glob('../dataset/data/*.jsonl'))
 json_files.extend(glob.glob('../dataset/data/*.json'))
 
-source_dir = '../dataset/images/COCO2017'
-destination_dir = '../dataset/images/relevant_images'
+source_dir = '../data/images/COCO2017'
+destination_dir = '../data/images/relevant_images'
 
 for file in json_files:
     copy_images(file, source_dir, destination_dir)
