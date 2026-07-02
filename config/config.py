@@ -5,8 +5,16 @@ Tái sử dụng và mở rộng từ CODA config.
 
 import os
 
+import sys
+
 # ======== PATHS ========
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Inject GroundingDINO to sys.path for Kaggle
+GD_PATH = os.path.join(BASE_DIR, "GroundingDINO")
+if GD_PATH not in sys.path:
+    sys.path.insert(0, GD_PATH)
+
 # Local data (copied from CODA)
 DATA_DIR = os.path.join(BASE_DIR, "data")
 JSON_DIR = os.path.join(DATA_DIR, "json")
@@ -20,6 +28,7 @@ OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
 # Thử nhiều candidate paths, ưu tiên local
 _CANDIDATE_IMAGE_PATHS = [
     os.path.join(BASE_DIR, "..", "thamkhao", "SpatialMQA", "Dataset", "relevant_images"),
+    os.path.join(BASE_DIR, "data", "images", "relevant_images"),
     os.path.join(BASE_DIR, "data", "images"),
     os.path.join(BASE_DIR, "relevant_images"),
 ]

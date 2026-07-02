@@ -5,8 +5,16 @@ Tách riêng thresholds và visual config, không hard-code trong các module.
 
 import os
 
+import sys
+
 # ======== PATHS ========
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Inject GroundingDINO to sys.path for Kaggle
+GD_PATH = os.path.join(BASE_DIR, "GroundingDINO")
+if GD_PATH not in sys.path:
+    sys.path.insert(0, GD_PATH)
+
 DATA_DIR = os.path.join(BASE_DIR, "data")
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 DEBUG_DIR = os.path.join(OUTPUT_DIR, "debug")
@@ -14,6 +22,7 @@ DEBUG_DIR = os.path.join(OUTPUT_DIR, "debug")
 # Image directory (try multiple candidates)
 _IMAGE_CANDIDATES = [
     os.path.join(BASE_DIR, "..", "relevant_images"),
+    os.path.join(BASE_DIR, "data", "images", "relevant_images"),
     os.path.join(BASE_DIR, "data", "images"),
     os.path.join(BASE_DIR, "relevant_images"),
 ]
