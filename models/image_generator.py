@@ -56,23 +56,30 @@ def _patch_groundingdino_transformers_compat():
     """
     try:
         import transformers.models.bert.modeling_bert as bert_module
-        from transformers.modeling_utils import PreTrainedModel
-        # Patch BertPreTrainedModel nếu thiếu get_head_mask
+        
+        def dummy_get_head_mask(self, head_mask, num_hidden_layers, is_attention_chunked=False):
+            if head_mask is not None:
+                raise NotImplementedError("head_mask is not supported in this patch")
+            return [None] * num_hidden_layers
+
         if not hasattr(bert_module.BertPreTrainedModel, "get_head_mask"):
-            bert_module.BertPreTrainedModel.get_head_mask = PreTrainedModel.get_head_mask
-        # Patch BertModel trực tiếp (phòng thủ)
+            bert_module.BertPreTrainedModel.get_head_mask = dummy_get_head_mask
         if not hasattr(bert_module.BertModel, "get_head_mask"):
-            bert_module.BertModel.get_head_mask = PreTrainedModel.get_head_mask
+            bert_module.BertModel.get_head_mask = dummy_get_head_mask
     except Exception:
         pass
 
     try:
-        # Patch lớp BertModelWarper trong GroundingDINO nếu đã được import
         import groundingdino.models.GroundingDINO.bertwarper as bw
-        from transformers.modeling_utils import PreTrainedModel
+        
+        def dummy_get_head_mask_bw(self, head_mask, num_hidden_layers, is_attention_chunked=False):
+            if head_mask is not None:
+                raise NotImplementedError("head_mask is not supported in this patch")
+            return [None] * num_hidden_layers
+            
         for cls in [bw.BertModelWarper]:
             if not hasattr(cls, "get_head_mask"):
-                cls.get_head_mask = PreTrainedModel.get_head_mask
+                cls.get_head_mask = dummy_get_head_mask_bw
     except Exception:
         pass
 
