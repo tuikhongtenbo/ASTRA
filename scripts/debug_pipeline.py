@@ -42,6 +42,9 @@ def find_image_path(image_name: str) -> str | None:
     candidates = [
         os.path.join(IMAGE_DIR, image_name),
         os.path.join(IMAGE_DIR, image_name.replace(".jpg", ".png")),
+        # Trường hợp IMAGE_DIR là data/images, ảnh nằm trong relevant_images/
+        os.path.join(IMAGE_DIR, "relevant_images", image_name),
+        os.path.join(IMAGE_DIR, "relevant_images", image_name.replace(".jpg", ".png")),
     ]
     for p in candidates:
         if os.path.exists(p):

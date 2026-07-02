@@ -57,25 +57,69 @@ def should_run_grounding(record: dict) -> bool:
 
 
 def load_grounding_model(device: str = "cuda"):
-    """Load Grounding DINO model và processor."""
+    """
+    Load Grounding DINO model và processor.
+    Hỗ trợ 2 cách cài:
+      1. git clone IDEA-Research/GroundingDINO → package 'groundingdino'
+      2. pip install grounding-dino           → package 'grounding_dino'
+    """
+    import sys
+    import os
+
+    # Thử inject thư mục GroundingDINO clone vào sys.path nếu chưa có
+    _base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _gd_clone_path = os.path.join(_base, "GroundingDINO")
+    if os.path.isdir(_gd_clone_path) and _gd_clone_path not in sys.path:
+        sys.path.insert(0, _gd_clone_path)
+
+    # ── Thử import từ repo clone (IDEA-Research/GroundingDINO) ──
     try:
-        from grounding_dino.grounding_dino import load_model
-        from grounding_dino.grounding_dino_cfg import ModelConfig
-    except ImportError:
-        raise ImportError(
-            "Grounding DINO not found. Install: pip install grounding-dino "
-            "or check your PYTHONPATH."
-        )
-    config = ModelConfig()
-    model = load_model(config, "cogagent/grounding-dino-tiny")
-    model = model.to(device)
-    model.eval()
-    try:
-        from transformers import AutoProcessor
-        processor = AutoProcessor.from_pretrained("cogagent/grounding-dino-tiny")
-    except Exception:
-        processor = None
-    return model, processor, device
+        from groundingdino.util.inference import load_model as gd_load_model
+        import groundingdino.datasets.transforms as T
+        from torchvision.ops import box_convert
+        import torch
+
+        # Tìm config và weights trong thư mục clone
+        _cfg = os.path.join(_gd_clone_path, "groundingdino", "config", "GroundingDINO_SwinT_OGC.py")
+        _ckpt = os.path.join(_gd_clone_path, "weights", "groundingdino_swint_ogc.pth")
+
+        if not os.path.exists(_cfg):
+            raise FileNotFoundError(f"Config không tìm thấy: {_cfg}")
+        if not os.path.exists(_ckpt):
+            raise FileNotFoundError(
+                f"Checkpoint không tìm thấy: {_ckpt}\n"
+                f"Hãy tải về bằng lệnh:\n"
+                f"  mkdir -p {os.path.join(_gd_clone_path, 'weights')} && "
+                f"  wget -q https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth "
+                f"-O {_ckpt}"
+            )
+
+        model = gd_load_model(_cfg, _ckpt, device=device)
+        model.eval()
+        # Trả về model cùng T (dùng như processor) và device
+        return model, T, device
+
+    except Exception as e1:
+        # ── Fallback: pip install grounding-dino ──
+        try:
+            from grounding_dino.grounding_dino import load_model
+            from grounding_dino.grounding_dino_cfg import ModelConfig
+            config = ModelConfig()
+            model = load_model(config, "cogagent/grounding-dino-tiny")
+            model = model.to(device).eval()
+            try:
+                from transformers import AutoProcessor
+                processor = AutoProcessor.from_pretrained("cogagent/grounding-dino-tiny")
+            except Exception:
+                processor = None
+            return model, processor, device
+        except ImportError:
+            raise ImportError(
+                f"Grounding DINO not found. Chi tiết lỗi clone: {e1}\n"
+                "Cài đặt: pip install grounding-dino HOẶC "
+                "git clone https://github.com/IDEA-Research/GroundingDINO.git && "
+                "cd GroundingDINO && pip install -e ."
+            )
 
 
 def _detect_single(
