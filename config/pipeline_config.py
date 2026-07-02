@@ -15,16 +15,14 @@ GD_PATH = os.path.join(BASE_DIR, "GroundingDINO")
 if GD_PATH not in sys.path:
     sys.path.insert(0, GD_PATH)
 
-DATA_DIR = os.path.join(BASE_DIR, "data")
+DATA_DIR = os.path.join(BASE_DIR, "dataset", "data")
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 DEBUG_DIR = os.path.join(OUTPUT_DIR, "debug")
 
-# Image directory (try specific candidates first)
+# Image directory (images live under data/images/, extraction JSON lives under dataset/data/)
 _IMAGE_CANDIDATES = [
     os.path.join(BASE_DIR, "data", "images", "relevant_images"),
     os.path.join(BASE_DIR, "data", "images"),
-    os.path.join(BASE_DIR, "relevant_images"),
-    os.path.join(BASE_DIR, "..", "relevant_images"),
 ]
 for _p in _IMAGE_CANDIDATES:
     if os.path.exists(_p):
