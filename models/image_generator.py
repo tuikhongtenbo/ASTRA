@@ -360,9 +360,9 @@ def load_depth_model(model_size: str = "small", device: str = "cuda"):
             "Depth-Anything-V2 not found. Install: pip install depth-anything-v2"
         )
     configs = {
-        "small": {"encoder": "vitl", "features": 256},
-        "base": {"encoder": "vitl", "features": 512},
-        "large": {"encoder": "vitl", "features": 512},
+        "small":  {"encoder": "vitl", "features": 256,  "out_channels": [256, 512, 1024, 1024]},
+        "base":   {"encoder": "vitl", "features": 512,  "out_channels": [256, 512, 1024, 1024]},
+        "large":  {"encoder": "vitl", "features": 512,  "out_channels": [256, 512, 1024, 1024]},
     }
     model = DepthAnythingV2(**configs.get(model_size, configs["small"]))
     model = model.to(device).eval()

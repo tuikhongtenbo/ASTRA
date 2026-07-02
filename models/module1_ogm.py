@@ -240,22 +240,60 @@ def best_match(entity: str, vocabulary: list[str]) -> str:
 
 
 def load_grounding_model(device: str = "cuda"):
-    try:
-        from grounding_dino.grounding_dino import load_model
-        from grounding_dino.grounding_dino_cfg import ModelConfig
-    except ImportError:
-        raise ImportError("Grounding DINO not found. Install: pip install grounding-dino")
+    """
+    Load Grounding DINO từ local repo clone + local weights.
+    Cách cài đặt:
+      git clone https://github.com/IDEA-Research/GroundingDINO.git
+      mkdir -p GroundingDINO/weights
+      wget https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth \\
+          -O GroundingDINO/weights/groundingdino_swint_ogc.pth
+      pip install -e GroundingDINO
+    """
+    import os
+    import sys as _sys
 
-    config = ModelConfig()
-    model = load_model(config, "cogagent/grounding-dino-tiny")
-    model = model.to(device)
+    _base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _gd_path = os.path.join(_base, "GroundingDINO")
+    if _gd_path not in _sys.path:
+        _sys.path.insert(0, _gd_path)
+
+    _patch_transformers_compat()
+
+    _cfg = os.path.join(_gd_path, "groundingdino", "config", "GroundingDINO_SwinT_OGC.py")
+    _ckpt = os.path.join(_gd_path, "weights", "groundingdino_swint_ogc.pth")
+
+    if not os.path.exists(_cfg) or not os.path.exists(_ckpt):
+        raise FileNotFoundError(
+            f"GroundingDINO config or checkpoint not found.\n"
+            f"  Config: {_cfg}\n  Checkpoint: {_ckpt}\n"
+            f"Download: wget https://github.com/IDEA-Research/GroundingDINO/releases/"
+            f"download/v0.1.0-alpha/groundingdino_swint_ogc.pth -O {_ckpt}"
+        )
+
+    from groundingdino.util.inference import load_model as _gd_load
+    model = _gd_load(_cfg, _ckpt, device=device)
     model.eval()
+    return model, None, device
+
+
+def _patch_transformers_compat():
+    """Monkey-patch transformers >= 4.31: thêm get_head_mask cho BertPreTrainedModel."""
     try:
-        from transformers import AutoProcessor
-        processor = AutoProcessor.from_pretrained("cogagent/grounding-dino-tiny")
+        import transformers.models.bert.modeling_bert as _bm
+        from transformers.modeling_utils import PreTrainedModel
+        if not hasattr(_bm.BertPreTrainedModel, "get_head_mask"):
+            _bm.BertPreTrainedModel.get_head_mask = PreTrainedModel.get_head_mask
+        if not hasattr(_bm.BertModel, "get_head_mask"):
+            _bm.BertModel.get_head_mask = PreTrainedModel.get_head_mask
     except Exception:
-        processor = None
-    return model, processor, device
+        pass
+    try:
+        import groundingdino.models.GroundingDINO.bertwarper as _bw
+        from transformers.modeling_utils import PreTrainedModel
+        if not hasattr(_bw.BertModelWarper, "get_head_mask"):
+            _bw.BertModelWarper.get_head_mask = PreTrainedModel.get_head_mask
+    except Exception:
+        pass
 
 
 def detect_objects(
@@ -266,55 +304,56 @@ def detect_objects(
     device: str = "cuda",
     threshold: float = 0.3,
 ) -> dict:
+    """
+    Detect entities trên ảnh bằng Grounding DINO.
+    Dùng groundingdino.util.inference.predict() — đúng cách từ notebook reference.
+    """
     if grounding_model is None:
         grounding_model, processor, device = load_grounding_model(device)
+
+    from groundingdino.util.inference import load_image as _load_img, predict as _predict
+
+    import numpy as np
 
     results = {}
     for entity in entities:
         if not entity:
             continue
-        text_prompt = entity.strip() + "."
+        text_prompt = entity.strip().rstrip(".") + "."
         try:
             with torch.no_grad():
-                if processor is not None:
-                    inputs = processor(
-                        images=image, texts=[text_prompt], return_tensors="pt"
-                    ).to(device)
-                    outputs = grounding_model(**inputs)
-                else:
-                    from torchvision import transforms
-                    img_resized = image.resize((640, 640)).convert("RGB")
-                    transform = transforms.Compose([transforms.ToTensor()])
-                    img_tensor = transform(img_resized).unsqueeze(0).to(device)
-                    outputs = grounding_model(img_tensor, [text_prompt])
+                # Lưu ảnh tạm để predict (load_image cần path)
+                import tempfile, os as _os
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False, mode="wb") as f:
+                    image.save(f.name)
+                    tmp_path = f.name
+                try:
+                    _, image_tensor = _load_img(tmp_path)
+                    boxes, logits, phrases = _predict(
+                        model=grounding_model,
+                        image=image_tensor,
+                        caption=text_prompt,
+                        box_threshold=threshold,
+                        text_threshold=0.25,
+                        device=device,
+                    )
+                finally:
+                    _os.unlink(tmp_path)
 
-            if hasattr(outputs, "pred_boxes"):
-                boxes = outputs.pred_boxes[0].cpu().numpy()
-                scores = outputs.scores[0].cpu().numpy() if hasattr(outputs, "scores") else [1.0]
-            elif isinstance(outputs, (list, tuple)) and len(outputs) >= 2:
-                boxes = outputs[0][0].cpu().numpy()
-                scores = outputs[1][0].cpu().numpy() if len(outputs) > 1 else [1.0]
-            else:
-                boxes = []
-                scores = []
+                if boxes is None or len(boxes) == 0:
+                    results[entity] = {"bbox": None, "score": 0.0}
+                    continue
 
-            best_idx, best_score = 0, 0.0
-            for idx, score in enumerate(scores):
-                if score > best_score:
-                    best_score, best_idx = score, idx
-
-            if best_score >= threshold and best_idx < len(boxes):
-                box = boxes[best_idx]
-                cx, cy, bw, bh = box
+                best_idx = int(torch.argmax(logits))
+                score = float(logits[best_idx])
+                cx, cy, bw, bh = boxes[best_idx].tolist()
                 x1 = max(0.0, cx - bw / 2)
                 y1 = max(0.0, cy - bh / 2)
                 x2 = min(1.0, cx + bw / 2)
                 y2 = min(1.0, cy + bh / 2)
-                results[entity] = ([x1, y1, x2, y2], float(best_score))
-            else:
-                results[entity] = ([0.0, 0.0, 0.0, 0.0], float(best_score))
+                results[entity] = {"bbox": [x1, y1, x2, y2], "score": score}
         except Exception:
-            results[entity] = ([0.0, 0.0, 0.0, 0.0], 0.0)
+            results[entity] = {"bbox": None, "score": 0.0}
     return results
 
 
@@ -406,12 +445,14 @@ def run_ogm(
             )
             detections.update(o2_results)
 
-    O1_det = detections.get(O1_name, ([0, 0, 0, 0], 0.0))
-    O1_bbox, O1_conf = O1_det
-    O2_bbox, O2_conf = 0.0, 0.0
+    O1_det = detections.get(O1_name, {"bbox": [0,0,0,0], "score": 0.0})
+    O1_bbox = O1_det.get("bbox", [0,0,0,0])
+    O1_conf = O1_det.get("score", 0.0)
+    O2_bbox, O2_conf = [0,0,0,0], 0.0
     if not O2_is_viewer:
-        O2_det = detections.get(O2_name, ([0, 0, 0, 0], 0.0))
-        O2_bbox, O2_conf = O2_det
+        O2_det = detections.get(O2_name, {"bbox": [0,0,0,0], "score": 0.0})
+        O2_bbox = O2_det.get("bbox", [0,0,0,0])
+        O2_conf = O2_det.get("score", 0.0)
 
     # All-or-nothing: both must pass threshold (O2 skipped if viewer)
     both_pass = O1_conf >= confidence_threshold
