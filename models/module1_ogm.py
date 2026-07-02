@@ -5,16 +5,8 @@ Detect bbox cho O1, O2 bằng Grounding DINO, vẽ [1], [2] lên ảnh.
 
 from __future__ import annotations
 
-import os
 import re
-import sys
-from pathlib import Path
 from typing import Optional
-
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-_GD_PATH = _REPO_ROOT / "GroundingDINO"
-if _GD_PATH.exists() and str(_GD_PATH) not in sys.path:
-    sys.path.insert(0, str(_GD_PATH))
 
 import torch
 from PIL import Image, ImageDraw, ImageFont
@@ -252,15 +244,35 @@ def load_grounding_model(device: str = "cuda"):
         from grounding_dino.grounding_dino import load_model
         from grounding_dino.grounding_dino_cfg import ModelConfig
     except ImportError:
-        raise ImportError("Grounding DINO not found. Install: pip install grounding-dino")
+        raise ImportError(
+            "Grounding DINO not found. Make sure GroundingDINO repo is cloned "
+            "and installed: pip install -e GroundingDINO/"
+        )
+
+    import os as _os
+    from pathlib import Path as _Path
+
+    cache_dir = _Path.home() / ".cache" / "huggingface" / "hub"
+    ckpt_name = "groundingdino-tiny"
+    local_ckpt = cache_dir / f"models--cogagent--{ckpt_name}" / "snapshots" / "main" / f"{ckpt_name}.pth"
+    if not local_ckpt.exists():
+        try:
+            from huggingface_hub import snapshot_download
+            print(f"[GroundingDINO] Downloading weights to {local_ckpt.parent.parent.parent}...")
+            snapshot_download(repo_id=f"cogagent/{ckpt_name}", cache_dir=str(cache_dir.parent.parent))
+        except Exception as e:
+            print(f"[GroundingDINO] Download failed: {e}")
+            local_ckpt = None
 
     config = ModelConfig()
-    model = load_model(config, "cogagent/grounding-dino-tiny")
+    ckpt_path = str(local_ckpt) if local_ckpt and local_ckpt.exists() else "cogagent/grounding-dino-tiny"
+    model = load_model(config, ckpt_path)
     model = model.to(device)
     model.eval()
+
     try:
         from transformers import AutoProcessor
-        processor = AutoProcessor.from_pretrained("cogagent/grounding-dino-tiny")
+        processor = AutoProcessor.from_pretrained(f"cogagent/{ckpt_name}")
     except Exception:
         processor = None
     return model, processor, device

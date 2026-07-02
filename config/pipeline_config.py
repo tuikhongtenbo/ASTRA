@@ -19,12 +19,12 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 DEBUG_DIR = os.path.join(OUTPUT_DIR, "debug")
 
-# Image directory — thứ tự ưu tiên: data/images trước, relevant_images sau
+# Image directory (try most specific first)
 _IMAGE_CANDIDATES = [
-    os.path.join(BASE_DIR, "data", "images"),           # ASTRA/data/images/
+    os.path.join(BASE_DIR, "data", "images"),
     os.path.join(BASE_DIR, "data", "images", "relevant_images"),
-    os.path.join(BASE_DIR, "relevant_images"),          # ASTRA/relevant_images/
-    os.path.join(BASE_DIR, "..", "relevant_images"),     # /kaggle/working/relevant_images/
+    os.path.join(BASE_DIR, "relevant_images"),
+    os.path.join(BASE_DIR, "..", "relevant_images"),
 ]
 for _p in _IMAGE_CANDIDATES:
     if os.path.exists(_p):
