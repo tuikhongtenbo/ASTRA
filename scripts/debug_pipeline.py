@@ -208,6 +208,8 @@ def main():
               f"box_o2={box_info.get('box_o2')}")
 
         # ── Module 2: Depth ──
+        # Chạy độc lập — không phụ thuộc vào marks_ok của M1.
+        # Nếu M1 fail (bbox=None), depth vẫn tính median toàn ảnh.
         depth_ok = False
         depth_img = img.copy()
         depth_map = None

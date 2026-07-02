@@ -47,26 +47,102 @@ def should_run_grounding(record: dict) -> bool:
     return True
 
 
-def load_grounding_model(device: str = "cuda"):
-    """Load Grounding DINO model và processor."""
+def _patch_groundingdino_transformers_compat():
+    """
+    Monkey-patch để GroundingDINO tương thích với transformers >= 4.31.
+    Lỗi gốc: 'BertModel' object has no attribute 'get_head_mask'
+    Nguyên nhân: transformers mới di chuyển get_head_mask sang PreTrainedModel
+    nhưng BertPreTrainedModel trong GroundingDINO không kế thừa đúng.
+    """
     try:
-        from grounding_dino.grounding_dino import load_model
-        from grounding_dino.grounding_dino_cfg import ModelConfig
-    except ImportError:
-        raise ImportError(
-            "Grounding DINO not found. Install: pip install grounding-dino "
-            "or check your PYTHONPATH."
-        )
-    config = ModelConfig()
-    model = load_model(config, "cogagent/grounding-dino-tiny")
-    model = model.to(device)
-    model.eval()
-    try:
-        from transformers import AutoProcessor
-        processor = AutoProcessor.from_pretrained("cogagent/grounding-dino-tiny")
+        import transformers.models.bert.modeling_bert as bert_module
+        from transformers.modeling_utils import PreTrainedModel
+        # Patch BertPreTrainedModel nếu thiếu get_head_mask
+        if not hasattr(bert_module.BertPreTrainedModel, "get_head_mask"):
+            bert_module.BertPreTrainedModel.get_head_mask = PreTrainedModel.get_head_mask
+        # Patch BertModel trực tiếp (phòng thủ)
+        if not hasattr(bert_module.BertModel, "get_head_mask"):
+            bert_module.BertModel.get_head_mask = PreTrainedModel.get_head_mask
     except Exception:
-        processor = None
-    return model, processor, device
+        pass
+
+    try:
+        # Patch lớp BertModelWarper trong GroundingDINO nếu đã được import
+        import groundingdino.models.GroundingDINO.bertwarper as bw
+        from transformers.modeling_utils import PreTrainedModel
+        for cls in [bw.BertModelWarper]:
+            if not hasattr(cls, "get_head_mask"):
+                cls.get_head_mask = PreTrainedModel.get_head_mask
+    except Exception:
+        pass
+
+
+def load_grounding_model(device: str = "cuda"):
+    """
+    Load Grounding DINO model và processor.
+    Hỗ trợ 2 cách cài:
+      1. git clone IDEA-Research/GroundingDINO → package 'groundingdino'
+      2. pip install grounding-dino            → package 'grounding_dino'
+    """
+    import sys
+    import os
+
+    # Inject thư mục GroundingDINO clone vào sys.path nếu chưa có
+    _base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _gd_clone_path = os.path.join(_base, "GroundingDINO")
+    if os.path.isdir(_gd_clone_path) and _gd_clone_path not in sys.path:
+        sys.path.insert(0, _gd_clone_path)
+
+    # ── Thử import từ repo clone (IDEA-Research/GroundingDINO) ──
+    try:
+        # Patch trước khi import để tránh lỗi get_head_mask
+        _patch_groundingdino_transformers_compat()
+
+        from groundingdino.util.inference import load_model as gd_load_model
+
+        # Patch sau khi import (BertModelWarper có thể chưa tồn tại trước đó)
+        _patch_groundingdino_transformers_compat()
+
+        _cfg = os.path.join(
+            _gd_clone_path, "groundingdino", "config", "GroundingDINO_SwinT_OGC.py"
+        )
+        _ckpt = os.path.join(_gd_clone_path, "weights", "groundingdino_swint_ogc.pth")
+
+        if not os.path.exists(_cfg):
+            raise FileNotFoundError(f"Config không tìm thấy: {_cfg}")
+        if not os.path.exists(_ckpt):
+            raise FileNotFoundError(
+                f"Checkpoint không tìm thấy: {_ckpt}\n"
+                f"Tải về bằng lệnh:\n"
+                f"  mkdir -p {os.path.join(_gd_clone_path, 'weights')}\n"
+                f"  wget -q https://github.com/IDEA-Research/GroundingDINO/releases/"
+                f"download/v0.1.0-alpha/groundingdino_swint_ogc.pth -O {_ckpt}"
+            )
+
+        model = gd_load_model(_cfg, _ckpt, device=device)
+        model.eval()
+        # Trả về (model, None, device) — processor không cần, dùng API inference trực tiếp
+        return model, None, device
+
+    except Exception as e1:
+        # ── Fallback: pip install grounding-dino ──
+        try:
+            from grounding_dino.grounding_dino import load_model
+            from grounding_dino.grounding_dino_cfg import ModelConfig
+            config = ModelConfig()
+            model = load_model(config, "cogagent/grounding-dino-tiny")
+            model = model.to(device).eval()
+            try:
+                from transformers import AutoProcessor
+                processor = AutoProcessor.from_pretrained("cogagent/grounding-dino-tiny")
+            except Exception:
+                processor = None
+            return model, processor, device
+        except ImportError:
+            raise ImportError(
+                f"Grounding DINO not found. Install: pip install grounding-dino "
+                f"or check your PYTHONPATH."
+            )
 
 
 def _detect_single(
