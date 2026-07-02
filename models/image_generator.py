@@ -48,41 +48,22 @@ def should_run_grounding(record: dict) -> bool:
 
 
 def load_grounding_model(device: str = "cuda"):
-    """Load Grounding DINO model from local checkpoint."""
+    """Load Grounding DINO model và processor."""
     try:
         from grounding_dino.grounding_dino import load_model
         from grounding_dino.grounding_dino_cfg import ModelConfig
     except ImportError:
         raise ImportError(
-            "Grounding DINO not found. Make sure GroundingDINO repo is cloned "
-            "and installed: pip install -e GroundingDINO/"
+            "Grounding DINO not found. Install: pip install grounding-dino "
+            "or check your PYTHONPATH."
         )
-
-    import os as _os
-    from pathlib import Path as _Path
-
-    # Download weights if not present
-    cache_dir = _Path.home() / ".cache" / "huggingface" / "hub"
-    ckpt_name = "groundingdino-tiny"
-    local_ckpt = cache_dir / f"models--cogagent--{ckpt_name}" / "snapshots" / "main" / f"{ckpt_name}.pth"
-    if not local_ckpt.exists():
-        try:
-            from huggingface_hub import snapshot_download
-            print(f"[GroundingDINO] Downloading weights to {local_ckpt.parent.parent.parent}...")
-            snapshot_download(repo_id=f"cogagent/{ckpt_name}", cache_dir=str(cache_dir.parent.parent))
-        except Exception as e:
-            print(f"[GroundingDINO] Download failed: {e}")
-            local_ckpt = None
-
     config = ModelConfig()
-    ckpt_path = str(local_ckpt) if local_ckpt and local_ckpt.exists() else "cogagent/grounding-dino-tiny"
-    model = load_model(config, ckpt_path)
+    model = load_model(config, "cogagent/grounding-dino-tiny")
     model = model.to(device)
     model.eval()
-
     try:
         from transformers import AutoProcessor
-        processor = AutoProcessor.from_pretrained(f"cogagent/{ckpt_name}")
+        processor = AutoProcessor.from_pretrained("cogagent/grounding-dino-tiny")
     except Exception:
         processor = None
     return model, processor, device

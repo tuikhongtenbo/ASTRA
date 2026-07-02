@@ -22,9 +22,6 @@ qwen-vl-utils>=0.0.8
 # Depth-Anything-V2 (pip package name: depth_anything_v2)
 depth-anything-v2
 
-# HuggingFace hub (for downloading Grounding DINO weights)
-huggingface-hub>=0.20.0
-
 # spaCy (for entity extraction in Module 1)
 spacy>=3.7.0
 # python -m spacy download en_core_web_sm
