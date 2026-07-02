@@ -25,9 +25,9 @@ def copy_images(jsonl_file, source_dir, destination_dir):
     print("Copy successful!")
 
 
-jsonl_file = os.listdir('../dataset/')
+jsonl_file = os.listdir('../data/')
 for i in range(len(jsonl_file)):
-    jsonl_file[i] = '../dataset/'+jsonl_file[i]
+    jsonl_file[i] = '../data/'+jsonl_file[i]
 source_dir = '../COCO2017'
 destination_dir = '../relevant_images'
 
