@@ -102,7 +102,7 @@ def find_image_path(image_dir: str, img_name: str) -> Optional[str]:
         os.path.join(os.path.dirname(image_dir), "relevant_images"),
         os.path.join(os.path.dirname(os.path.dirname(image_dir)), "relevant_images"),
         "relevant_images",
-        "data/images/relevant_images",
+        "dataset/images/relevant_images",
     ]
     for c in candidates:
         p = os.path.join(c, img_name)

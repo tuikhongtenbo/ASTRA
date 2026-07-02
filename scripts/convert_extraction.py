@@ -31,7 +31,7 @@ def main():
     )
     parser.add_argument(
         "--input",
-        default=str(_REPO_ROOT / "data" / "test.jsonl"),
+        default=str(_REPO_ROOT / "dataset" / "data" / "test.jsonl"),
         help="Đường dẫn file test.jsonl gốc"
     )
     parser.add_argument(

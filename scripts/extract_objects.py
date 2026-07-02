@@ -92,7 +92,7 @@ def main():
 
     # Ensure ASTRA-hi paths work regardless of where script is called from
     if not os.path.isabs(split_file) or not os.path.exists(split_file):
-        split_file = os.path.join(_REPO_ROOT, "data", f"{args.split}.jsonl")
+        split_file = os.path.join(_REPO_ROOT, "dataset", "data", f"{args.split}.jsonl")
 
     if not os.path.exists(split_file):
         print(f"[ERROR] Data file not found: {split_file}")

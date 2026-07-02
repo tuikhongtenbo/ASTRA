@@ -1,74 +1,39 @@
-"""
-Tool: Select relevant images for SpatialMQA samples.
-Dựa trên thamkhao/SpatialMQA/Dataset/tool/select_relevant_images.py
-"""
-
-from __future__ import annotations
-
 import json
 import os
-from typing import Optional
-
-from PIL import Image
+import shutil
 
 
-def select_relevant_images(
-    data_file: str,
-    output_file: str,
-    image_dir: str,
-    max_images: int = 10,
-) -> list[str]:
-    """
-    Chọn top-K images có liên quan nhất từ dataset.
-    Trả về list image paths.
-    """
-    if not os.path.exists(data_file):
-        print(f"[Tool] Data file not found: {data_file}")
-        return []
+def copy_images(jsonl_file, source_dir, destination_dir):
+    if not os.path.exists(destination_dir):
+        os.makedirs(destination_dir)
+    count = 0
+    with open(jsonl_file, 'r', encoding='gbk', errors='ignore') as f:
+        for line in f:
+            count += 1
+            data = json.loads(line)
+            image_filename = data['image']
 
-    selected = []
-    with open(data_file, "r", encoding="utf-8") as f:
-        for i, line in enumerate(f):
-            if i >= max_images:
-                break
-            line = line.strip()
-            if not line:
-                continue
-            obj = json.loads(line)
-            img_name = obj.get("image", "")
-            img_path = os.path.join(image_dir, img_name)
-            if os.path.exists(img_path):
-                selected.append(img_path)
+            source_path = os.path.join(source_dir, image_filename)
+
+            if os.path.exists(source_path):
+                destination_path = os.path.join(destination_dir, image_filename)
+                shutil.copyfile(source_path, destination_path)
             else:
-                # Try to find in subdirs
-                for subdir in ("relevant_images", "images"):
-                    candidate = os.path.join(image_dir, subdir, img_name)
-                    if os.path.exists(candidate):
-                        selected.append(candidate)
-                        break
+                print(f"Source file {image_filename} not found in {source_dir}")
 
-    # Save selected paths
-    os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
-    with open(output_file, "w", encoding="utf-8") as f:
-        for p in selected:
-            f.write(p + "\n")
-
-    print(f"[Tool] Selected {len(selected)} images -> {output_file}")
-    return selected
+    print(jsonl_file+': '+str(count))
+    print("Copy successful!")
 
 
-def verify_images(image_paths: list[str]) -> dict:
-    """
-    Kiểm tra tất cả images có đọc được không.
-    Returns dict: {path: valid, ...}
-    """
-    results = {}
-    for p in image_paths:
-        try:
-            Image.open(p).convert("RGB")
-            results[p] = True
-        except Exception:
-            results[p] = False
-    valid = sum(1 for v in results.values() if v)
-    print(f"[Tool] {valid}/{len(results)} images valid")
-    return results
+import glob
+
+# Lấy các file JSONL/JSON trong dataset/data/
+json_files = []
+json_files.extend(glob.glob('../dataset/data/*.jsonl'))
+json_files.extend(glob.glob('../dataset/data/*.json'))
+
+source_dir = '../dataset/images/COCO2017'
+destination_dir = '../dataset/images/relevant_images'
+
+for file in json_files:
+    copy_images(file, source_dir, destination_dir)
