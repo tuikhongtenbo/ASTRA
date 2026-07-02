@@ -10,7 +10,16 @@ Quy ước xuyên suốt:
 
 from __future__ import annotations
 
+import os
+import sys
+from pathlib import Path
 from typing import Optional
+
+# Ensure GroundingDINO is on path (for Kaggle/local dev where it lives next to ASTRA)
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_GD_PATH = _REPO_ROOT / "GroundingDINO"
+if _GD_PATH.exists() and str(_GD_PATH) not in sys.path:
+    sys.path.insert(0, str(_GD_PATH))
 
 import cv2
 import numpy as np

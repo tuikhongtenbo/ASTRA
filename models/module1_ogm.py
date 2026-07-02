@@ -5,8 +5,16 @@ Detect bbox cho O1, O2 bằng Grounding DINO, vẽ [1], [2] lên ảnh.
 
 from __future__ import annotations
 
+import os
 import re
+import sys
+from pathlib import Path
 from typing import Optional
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_GD_PATH = _REPO_ROOT / "GroundingDINO"
+if _GD_PATH.exists() and str(_GD_PATH) not in sys.path:
+    sys.path.insert(0, str(_GD_PATH))
 
 import torch
 from PIL import Image, ImageDraw, ImageFont
