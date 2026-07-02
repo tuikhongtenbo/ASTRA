@@ -1,0 +1,27 @@
+# requirements_base.txt — Base dependencies (without GroundingDINO)
+# Install AFTER cloning GroundingDINO:
+#   git clone https://github.com/IDEA-Research/GroundingDINO.git
+#   cd GroundingDINO && pip install -e . && cd ..
+#   pip install -r requirements_base.txt
+
+# Core
+torch>=2.1.0
+torchvision>=0.16.0
+transformers>=4.40.0
+accelerate>=0.28.0
+pillow>=10.0.0
+tqdm>=4.66.0
+numpy>=1.24.0
+scikit-learn>=1.3.0
+pandas>=2.0.0
+opencv-python>=4.8.0
+
+# Qwen VL support
+qwen-vl-utils>=0.0.8
+
+# Depth-Anything-V2 (pip package name: depth_anything_v2)
+depth-anything-v2
+
+# spaCy (for entity extraction in Module 1)
+spacy>=3.7.0
+# python -m spacy download en_core_web_sm
