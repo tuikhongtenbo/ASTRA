@@ -11,7 +11,7 @@ from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 
 from config.config import DATA_DIR, IMAGE_DIR
-from utils.utils import find_image_path
+from utils.utils import find_image_path, load_image
 
 
 class SpatialMQADataset(Dataset):
@@ -39,10 +39,7 @@ class SpatialMQADataset(Dataset):
                 obj['image_path'] = img_path
 
                 if img_path and not self.lazy_load:
-                    try:
-                        obj['image'] = Image.open(img_path).convert('RGB')
-                    except Exception:
-                        obj['image'] = img_path
+                    obj['image'] = load_image(img_path) or img_path
                 else:
                     obj['image'] = img_path or img_name
 

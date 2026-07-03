@@ -20,7 +20,7 @@ from . import module1_ogm as ogm
 from . import module2_dlc as dlc
 from . import module3_odv as odv
 from . import prompt as prompts
-from utils.utils import find_image_path, get_device, normalize_relation
+from utils.utils import find_image_path, get_device, load_image, normalize_relation
 
 
 class ASTRAPipeline:
@@ -177,10 +177,10 @@ class ASTRAPipeline:
             if not path:
                 errors.append(f"{ref} -> not found")
                 continue
-            try:
-                return Image.open(path).convert("RGB"), path, None
-            except Exception as exc:
-                errors.append(f"{path} -> {type(exc).__name__}: {exc}")
+            image_obj = load_image(path)
+            if image_obj is not None:
+                return image_obj, path, None
+            errors.append(f"{path} -> open failed")
 
         detail = "; ".join(errors[:4])
         return None, None, f"Failed to load image: {detail} (IMAGE_DIR={self.image_dir})"

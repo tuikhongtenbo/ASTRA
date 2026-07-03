@@ -7,6 +7,9 @@ from __future__ import annotations
 import os
 import random
 import re
+import zipfile
+from functools import lru_cache
+from io import BytesIO
 from typing import Optional
 
 import numpy as np
@@ -90,20 +93,22 @@ def map_option_letter(letter: str, options: list) -> Optional[str]:
 # Image utilities
 # ---------------------------------------------------------------------------
 
-def find_image_path(image_dir: str, img_name: str) -> Optional[str]:
-    if not img_name:
-        return None
-    if os.path.exists(img_name):
-        return os.path.abspath(img_name)
-    if os.path.isabs(img_name) and os.path.exists(img_name):
-        return img_name
-    p = os.path.join(image_dir, img_name)
-    if os.path.exists(p):
-        return p
+_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
+_IMAGE_ZIP_NAMES = ("test_images.zip", "test2017.zip", "relevant_images.zip", "COCO2017.zip")
+_ZIP_PREFIX = "zip://"
+
+
+def _repo_base_dir() -> str:
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _candidate_image_dirs(image_dir: str) -> list[str]:
+    image_dir = image_dir or ""
     parent = os.path.dirname(image_dir)
     grandparent = os.path.dirname(parent)
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    base_dir = _repo_base_dir()
     candidates = [
+        image_dir,
         os.path.join(image_dir, "relevant_images"),
         os.path.join(image_dir, "test_images"),
         os.path.join(image_dir, "COCO2017"),
@@ -117,23 +122,136 @@ def find_image_path(image_dir: str, img_name: str) -> Optional[str]:
         "dataset/images/relevant_images",
         "dataset/images/test_images",
         "dataset/images/COCO2017",
+        "dataset/data/test_images",
+        "dataset/data/relevant_images",
         os.path.join(base_dir, "relevant_images"),
+        os.path.join(base_dir, "dataset", "data", "test_images"),
+        os.path.join(base_dir, "dataset", "data", "relevant_images"),
+        os.path.join(base_dir, "dataset", "images"),
         os.path.join(base_dir, "dataset", "images", "relevant_images"),
         os.path.join(base_dir, "dataset", "images", "test_images"),
         os.path.join(base_dir, "dataset", "images", "COCO2017"),
+        os.path.join(base_dir, "data", "test_images"),
+        os.path.join(base_dir, "data", "relevant_images"),
         os.path.join(base_dir, "data", "images"),
         os.path.join(base_dir, "data", "images", "test_images"),
         os.path.join(base_dir, "data", "images", "relevant_images"),
     ]
-    for c in candidates:
-        p = os.path.join(c, img_name)
-        if os.path.exists(p):
-            return p
+    seen = set()
+    unique = []
+    for path in candidates:
+        if path and path not in seen:
+            seen.add(path)
+            unique.append(path)
+    return unique
+
+
+@lru_cache(maxsize=16)
+def _zip_member_index(zip_path: str) -> dict[str, str]:
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            index = {}
+            for member in zf.namelist():
+                if member.endswith("/"):
+                    continue
+                name = os.path.basename(member)
+                if name.lower().endswith(_IMAGE_EXTS):
+                    index.setdefault(name, member)
+            return index
+    except Exception:
+        return {}
+
+
+@lru_cache(maxsize=32)
+def _image_zip_paths(image_dir: str) -> tuple[str, ...]:
+    roots = _candidate_image_dirs(image_dir)
+    zips = []
+    seen = set()
+
+    for root in roots:
+        if root.lower().endswith(".zip") and os.path.exists(root):
+            path = os.path.abspath(root)
+            if path not in seen:
+                seen.add(path)
+                zips.append(path)
+            continue
+        for zip_name in _IMAGE_ZIP_NAMES:
+            path = os.path.join(root, zip_name)
+            if os.path.exists(path):
+                path = os.path.abspath(path)
+                if path not in seen:
+                    seen.add(path)
+                    zips.append(path)
+
+    kaggle_input = "/kaggle/input"
+    if os.path.isdir(kaggle_input):
+        for dirpath, _, filenames in os.walk(kaggle_input):
+            for filename in filenames:
+                if filename in _IMAGE_ZIP_NAMES:
+                    path = os.path.abspath(os.path.join(dirpath, filename))
+                    if path not in seen:
+                        seen.add(path)
+                        zips.append(path)
+    return tuple(zips)
+
+
+@lru_cache(maxsize=1)
+def _kaggle_image_index() -> dict[str, str]:
+    root = "/kaggle/input"
+    if not os.path.isdir(root):
+        return {}
+    index = {}
+    for dirpath, _, filenames in os.walk(root):
+        for filename in filenames:
+            if filename.lower().endswith(_IMAGE_EXTS):
+                index.setdefault(filename, os.path.join(dirpath, filename))
+    return index
+
+
+def _zip_uri(zip_path: str, member: str) -> str:
+    return f"{_ZIP_PREFIX}{zip_path}!{member}"
+
+
+def _split_zip_uri(path: str) -> tuple[str, str]:
+    spec = path[len(_ZIP_PREFIX):]
+    zip_path, member = spec.rsplit("!", 1)
+    return zip_path, member
+
+
+def find_image_path(image_dir: str, img_name: str) -> Optional[str]:
+    if not img_name:
+        return None
+    if isinstance(img_name, str) and img_name.startswith(_ZIP_PREFIX):
+        return img_name
+    if os.path.exists(img_name):
+        return os.path.abspath(img_name)
+    if os.path.isabs(img_name) and os.path.exists(img_name):
+        return img_name
+
+    for directory in _candidate_image_dirs(image_dir):
+        path = os.path.join(directory, img_name)
+        if os.path.exists(path):
+            return os.path.abspath(path)
+
+    basename = os.path.basename(img_name)
+    for zip_path in _image_zip_paths(image_dir or ""):
+        member = _zip_member_index(zip_path).get(basename)
+        if member:
+            return _zip_uri(zip_path, member)
+
+    indexed = _kaggle_image_index().get(basename)
+    if indexed:
+        return indexed
     return None
 
 
 def load_image(image_path: str):
     try:
+        if isinstance(image_path, str) and image_path.startswith(_ZIP_PREFIX):
+            zip_path, member = _split_zip_uri(image_path)
+            with zipfile.ZipFile(zip_path) as zf:
+                with zf.open(member) as f:
+                    return Image.open(BytesIO(f.read())).convert("RGB")
         return Image.open(image_path).convert("RGB")
     except Exception:
         return None
