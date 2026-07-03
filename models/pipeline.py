@@ -74,15 +74,64 @@ class ASTRAPipeline:
             self._load_depth_model()
 
     def _load_qwen_model(self):
-        from transformers import AutoModelForCausalLM, AutoProcessor
+        from transformers import AutoProcessor
         print(f"[Pipeline] Loading {self.model_name} on {self.device}...")
         t0 = time.time()
         self.processor = AutoProcessor.from_pretrained(self.model_name, trust_remote_code=True)
         torch_dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.model_name, torch_dtype=torch_dtype,
-            device_map=self.device, trust_remote_code=True, **self.model_kwargs,
-        )
+
+        load_kwargs = dict(self.model_kwargs)
+        load_kwargs.setdefault("trust_remote_code", True)
+        if self.device == "cuda":
+            load_kwargs.setdefault("device_map", "auto")
+        else:
+            load_kwargs.setdefault("device_map", None)
+
+        loader_candidates = []
+        try:
+            from transformers import AutoModelForImageTextToText
+            loader_candidates.append(AutoModelForImageTextToText)
+        except Exception:
+            pass
+        try:
+            from transformers import AutoModelForVision2Seq
+            loader_candidates.append(AutoModelForVision2Seq)
+        except Exception:
+            pass
+        try:
+            from transformers import Qwen3VLForConditionalGeneration
+            loader_candidates.append(Qwen3VLForConditionalGeneration)
+        except Exception:
+            pass
+        try:
+            from transformers import AutoModelForCausalLM
+            loader_candidates.append(AutoModelForCausalLM)
+        except Exception:
+            pass
+
+        last_error = None
+        for loader_cls in loader_candidates:
+            try:
+                self.model = loader_cls.from_pretrained(
+                    self.model_name,
+                    torch_dtype=torch_dtype,
+                    **load_kwargs,
+                )
+                break
+            except ValueError as e:
+                last_error = e
+                continue
+            except Exception as e:
+                last_error = e
+                continue
+
+        if self.model is None:
+            raise RuntimeError(
+                f"Failed to load model {self.model_name} with available Transformers loaders: {last_error}"
+            )
+
+        if load_kwargs.get("device_map") is None:
+            self.model.to(self.device)
         self.model.eval()
         print(f"[Pipeline] Qwen3-VL loaded in {time.time() - t0:.1f}s")
 
