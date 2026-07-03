@@ -253,45 +253,36 @@ class ASTRAPipeline:
         return vc.most_common(1)[0][0]
 
     def _generate(self, image: Image.Image, prompt: str) -> str:
+        image_data = image.convert("RGB")
+        messages = [{"role": "user", "content": [
+            {"type": "image", "image": image_data},
+            {"type": "text", "text": prompt},
+        ]}]
+
         try:
-            from qwen_vl_utils import process_vision_info
-            image_data = image.convert("RGB")
-            try:
-                pv, ig, _ = process_vision_info({"image": image_data}, return_image_grid=True)
-            except Exception:
-                pv, ig = None, None
-
-            text_input = [{"role": "user", "content": [
-                {"type": "image", "image": "placeholder"},
-                {"type": "text", "text": prompt},
-            ]}]
-
+            chat_text = self.processor.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            ) if hasattr(self.processor, "apply_chat_template") else prompt
             inputs = self.processor(
-                text=text_input, images=image_data, return_tensors="pt", padding=True
+                text=[chat_text],
+                images=[image_data],
+                return_tensors="pt",
+                padding=True,
             ).to(self.device)
-            if pv is not None and hasattr(pv, "to"):
-                inputs["pixel_values"] = pv.to(self.device)
-            if ig is not None and hasattr(ig, "to"):
-                inputs["image_grid"] = ig.to(self.device)
-
-            with torch.no_grad():
-                output_ids = self.model.generate(
-                    **inputs, max_new_tokens=self.max_new_tokens, do_sample=False,
-                )
-            ilen = inputs["input_ids"].shape[1]
-            return self.processor.batch_decode(output_ids[:, ilen:], skip_special_tokens=True)[0].strip()
         except Exception:
             inputs = self.processor(
-                text=[{"role": "user", "content": [
-                    {"type": "image", "image": image}, {"type": "text", "text": prompt}
-                ]}], images=image, return_tensors="pt",
+                text=messages,
+                images=image_data,
+                return_tensors="pt",
+                padding=True,
             ).to(self.device)
-            with torch.no_grad():
-                output_ids = self.model.generate(
-                    **inputs, max_new_tokens=self.max_new_tokens, do_sample=False,
-                )
-            ilen = inputs["input_ids"].shape[1]
-            return self.processor.batch_decode(output_ids[:, ilen:], skip_special_tokens=True)[0].strip()
+
+        with torch.no_grad():
+            output_ids = self.model.generate(
+                **inputs, max_new_tokens=self.max_new_tokens, do_sample=False,
+            )
+        ilen = inputs["input_ids"].shape[1]
+        return self.processor.batch_decode(output_ids[:, ilen:], skip_special_tokens=True)[0].strip()
 
     def run_escalated(self, sample: dict) -> dict:
         """
@@ -660,48 +651,32 @@ class ASTRAPipeline:
         return pred
 
     def _generate_v2(self, image1: Image.Image, image2: Image.Image | None, prompt: str) -> str:
-        """Generate với 1 hoặc 2 ảnh (ASTRA v2)."""
+        """Generate with 1 or 2 images (ASTRA v2)."""
+        images = [image1.convert("RGB")]
         if image2 is not None:
-            images_for_vlm = [
-                {"role": "user", "content": [
-                    {"type": "image", "image": image1},
-                    {"type": "image", "image": image2},
-                    {"type": "text", "text": prompt},
-                ]}
-            ]
-        else:
-            images_for_vlm = [
-                {"role": "user", "content": [
-                    {"type": "image", "image": image1},
-                    {"type": "text", "text": prompt},
-                ]}
-            ]
+            images.append(image2.convert("RGB"))
+
+        messages = [{"role": "user", "content": []}]
+        for img in images:
+            messages[0]["content"].append({"type": "image", "image": img})
+        messages[0]["content"].append({"type": "text", "text": prompt})
 
         try:
-            from qwen_vl_utils import process_vision_info
-            pv, ig, _ = process_vision_info(
-                {"image": image1} if image2 is None else {"image": [image1, image2]},
-                return_image_grid=True,
-            )
-        except Exception:
-            pv, ig = None, None
-
-        try:
+            chat_text = self.processor.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            ) if hasattr(self.processor, "apply_chat_template") else prompt
             inputs = self.processor(
-                text=images_for_vlm,
-                images=image1 if image2 is None else [image1, image2],
+                text=[chat_text],
+                images=images,
                 return_tensors="pt",
                 padding=True,
             ).to(self.device)
-            if pv is not None and hasattr(pv, "to"):
-                inputs["pixel_values"] = pv.to(self.device)
-            if ig is not None and hasattr(ig, "to"):
-                inputs["image_grid"] = ig.to(self.device)
         except Exception:
             inputs = self.processor(
-                text=images_for_vlm,
-                images=image1,
+                text=messages,
+                images=images,
                 return_tensors="pt",
+                padding=True,
             ).to(self.device)
 
         with torch.no_grad():
