@@ -22,10 +22,16 @@ _client: Optional[TextExtractorClient] = None
 def _get_client() -> Optional[TextExtractorClient]:
     global _client
     if _client is None:
-        api_key = EXTRACTOR_API_KEY
+        api_key = (
+            EXTRACTOR_API_KEY
+            or os.getenv("EXTRACTOR_API_KEY", "").strip()
+            or os.getenv("QWEN_API_KEY", "").strip()
+            or os.getenv("DASHSCOPE_API_KEY", "").strip()
+        )
         if not api_key:
             return None
-        _client = TextExtractorClient(api_key, DASHSCOPE_BASE_URL)
+        base_url = os.getenv("DASHSCOPE_BASE_URL", "").strip() or DASHSCOPE_BASE_URL
+        _client = TextExtractorClient(api_key, base_url)
     return _client
 
 

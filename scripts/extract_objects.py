@@ -28,20 +28,18 @@ from models.extractor.extract import load_existing_extractions, save_extractions
 
 
 def _resolve_api_key() -> str:
-    """Try EXTRACTOR_API_KEY env var first, then .env file."""
-    key = os.environ.get("QWEN_API_KEY", "")
-    if key:
-        return key
-    key = os.environ.get("EXTRACTOR_API_KEY", "")
-    if key:
-        return key
+    """Try terminal env vars first, then .env file."""
+    for env_name in ("DASHSCOPE_API_KEY", "QWEN_API_KEY", "EXTRACTOR_API_KEY"):
+        key = os.environ.get(env_name, "")
+        if key:
+            return key
     for _dir in [Path.cwd(), _REPO_ROOT]:
         env = _dir / ".env"
         if env.exists():
             with open(env) as f:
                 for line in f:
                     line = line.strip()
-                    if line.startswith("QWEN_API_KEY") or line.startswith("EXTRACTOR_API_KEY"):
+                    if line.startswith("DASHSCOPE_API_KEY") or line.startswith("QWEN_API_KEY") or line.startswith("EXTRACTOR_API_KEY"):
                         parts = line.split("=", 1)
                         if len(parts) == 2:
                             return parts[1].strip().strip("'\"")
@@ -53,7 +51,7 @@ def _resolve_api_key() -> str:
             with open(candidate) as f:
                 for line in f:
                     line = line.strip()
-                    if "QWEN_API_KEY" in line or "EXTRACTOR_API_KEY" in line:
+                    if "DASHSCOPE_API_KEY" in line or "QWEN_API_KEY" in line or "EXTRACTOR_API_KEY" in line:
                         parts = line.split("=", 1)
                         if len(parts) == 2:
                             return parts[1].strip().strip("'\"")
@@ -82,8 +80,11 @@ def main():
     args = parser.parse_args()
 
     api_key = _resolve_api_key()
+    if api_key:
+        os.environ.setdefault("DASHSCOPE_API_KEY", api_key)
+        os.environ.setdefault("QWEN_API_KEY", api_key)
     if not api_key:
-        print("[ERROR] QWEN_API_KEY not found. Set env var or .env file.")
+        print("[ERROR] DASHSCOPE_API_KEY/QWEN_API_KEY not found. Set env var or .env file.")
         sys.exit(1)
 
     split_map = {"train": TRAIN_FILE, "dev": DEV_FILE, "test": TEST_FILE}

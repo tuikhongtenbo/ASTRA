@@ -12,10 +12,12 @@ import torch
 from PIL import Image
 
 from config.config import (
-    MODEL_ALIASES, DEFAULT_MODEL, MAX_NEW_TOKENS,
+    MODEL_ALIASES, API_MODEL_ALIASES, DEFAULT_MODEL, MAX_NEW_TOKENS,
     DEPTH_EPSILON, CONFIDENCE_THRESHOLD, N_PERMS, IMAGE_DIR,
     ESCALATION_LOG_FILE, EXTRACTION_OUTPUT_FILE,
+    DASHSCOPE_BASE_URL, VLM_API_KEY, VLM_BACKEND,
 )
+from .api_vlm_client import is_api_backend
 from . import module1_ogm as ogm
 from . import module2_dlc as dlc
 from . import module3_odv as odv
@@ -45,9 +47,15 @@ class ASTRAPipeline:
         load_models: bool = True,
         image_dir: str = IMAGE_DIR,
         use_escalation: bool = False,
+        vlm_backend: str = VLM_BACKEND,
+        api_key: str | None = None,
+        api_base_url: str | None = None,
         **model_kwargs,
     ):
-        self.model_name = MODEL_ALIASES.get(model_name, model_name)
+        self.raw_model_name = model_name
+        self.vlm_backend = (vlm_backend or "local").strip().lower()
+        aliases = API_MODEL_ALIASES if is_api_backend(self.vlm_backend) else MODEL_ALIASES
+        self.model_name = aliases.get(model_name, model_name)
         self.device = device or get_device()
         self.enable_modules = enable_modules if enable_modules is not None else [1, 2, 3]
         self.n_perms = n_perms
@@ -57,9 +65,12 @@ class ASTRAPipeline:
         self.model_kwargs = model_kwargs
         self.image_dir = image_dir
         self.use_escalation = use_escalation
+        self.api_key = api_key or VLM_API_KEY
+        self.api_base_url = api_base_url or DASHSCOPE_BASE_URL
 
         self.model = None
         self.processor = None
+        self.api_client = None
         self.yoloe_model = yoloe_model
         self.depth_model = depth_model
 
@@ -67,11 +78,25 @@ class ASTRAPipeline:
             self._load_models()
 
     def _load_models(self):
-        self._load_qwen_model()
+        if is_api_backend(self.vlm_backend):
+            self._load_api_client()
+        else:
+            self._load_qwen_model()
         if 1 in self.enable_modules and self.yoloe_model is None:
             self._load_yoloe_model()
         if 2 in self.enable_modules and self.depth_model is None:
             self._load_depth_model()
+
+    def _load_api_client(self):
+        from .api_vlm_client import DashScopeVisionClient
+
+        print(f"[Pipeline] Using DashScope API model={self.model_name}")
+        print(f"[Pipeline] DashScope base_url={self.api_base_url}")
+        self.api_client = DashScopeVisionClient(
+            model_name=self.model_name,
+            api_key=self.api_key,
+            base_url=self.api_base_url,
+        )
 
     def _load_qwen_model(self):
         from transformers import AutoProcessor
@@ -318,6 +343,13 @@ class ASTRAPipeline:
                 ) from fallback_exc
 
     def _generate(self, image: Image.Image, prompt: str) -> str:
+        if is_api_backend(self.vlm_backend):
+            if self.api_client is None:
+                self._load_api_client()
+            return self.api_client.generate(
+                [image.convert("RGB")], prompt, max_tokens=self.max_new_tokens
+            )
+
         inputs = self._prepare_generation_inputs([image.convert("RGB")], prompt)
 
         with torch.no_grad():
@@ -695,6 +727,11 @@ class ASTRAPipeline:
         if image2 is not None:
             images.append(image2.convert("RGB"))
 
+        if is_api_backend(self.vlm_backend):
+            if self.api_client is None:
+                self._load_api_client()
+            return self.api_client.generate(images, prompt, max_tokens=self.max_new_tokens)
+
         inputs = self._prepare_generation_inputs(images, prompt)
 
         with torch.no_grad():
@@ -709,7 +746,7 @@ class ASTRAPipeline:
         )[0].strip()
 
     def unload(self):
-        for attr in ("model", "yoloe_model", "depth_model"):
+        for attr in ("model", "yoloe_model", "depth_model", "api_client"):
             obj = getattr(self, attr, None)
             if obj is not None:
                 del obj
@@ -718,4 +755,7 @@ class ASTRAPipeline:
             torch.cuda.empty_cache()
 
     def __repr__(self):
-        return f"ASTRAPipeline(model={self.model_name}, modules={self.enable_modules}, device={self.device})"
+        return (
+            f"ASTRAPipeline(model={self.model_name}, backend={self.vlm_backend}, "
+            f"modules={self.enable_modules}, device={self.device})"
+        )

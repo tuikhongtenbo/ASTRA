@@ -16,6 +16,7 @@ opencv-python>=4.8.0
 
 # Qwen VL support
 qwen-vl-utils>=0.0.8
+openai>=1.0.0
 
 # Depth-Anything-V2 (pip package name: depth_anything_v2)
 depth-anything-v2

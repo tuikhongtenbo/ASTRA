@@ -24,7 +24,7 @@ from config.config import (
     MODEL_ALIASES, DEFAULT_MODEL,
     DATA_DIR, IMAGE_DIR,
     DEPTH_EPSILON, CONFIDENCE_THRESHOLD, N_PERMS,
-    ESCALATION_LOG_FILE,
+    ESCALATION_LOG_FILE, VLM_BACKEND,
 )
 from data_processing.dataset import SpatialMQADataset
 from evaluation.evaluator import (
@@ -97,6 +97,20 @@ def _parse_modules_arg(raw: str | None) -> list[int] | None:
         return None
     return [int(part.strip()) for part in raw.split(",") if part.strip()]
 
+
+def _add_vlm_backend_args(parser):
+    parser.add_argument(
+        "--backend",
+        default=VLM_BACKEND,
+        choices=["local", "dashscope", "api", "openai-compatible"],
+        help="VLM backend: local transformers or DashScope/OpenAI-compatible API",
+    )
+    parser.add_argument(
+        "--api-base-url",
+        default=None,
+        help="Override DashScope compatible-mode base URL; otherwise use env/.env",
+    )
+
 def cmd_eval(args):
     """Ch?y dnh gi: baseline, full ASTRA, ho?c escalation."""
     modules = _parse_modules_arg(args.modules)
@@ -113,8 +127,9 @@ def cmd_eval(args):
         tag = "escalation"
         modules = [1, 2, 3]
 
-    print(f"[Command] eval | model={args.model} | modules={modules or 'none'} "
-          f"| split={args.split} | escalation={args.escalation}")
+    print(f"[Command] eval | model={args.model} | backend={args.backend} "
+          f"| modules={modules or 'none'} | split={args.split} "
+          f"| escalation={args.escalation}")
 
     pipeline = ASTRAPipeline(
         model_name=args.model,
@@ -124,6 +139,8 @@ def cmd_eval(args):
         depth_epsilon=args.depth_epsilon,
         confidence_threshold=args.confidence_threshold,
         load_models=True,
+        vlm_backend=args.backend,
+        api_base_url=args.api_base_url,
         use_escalation=args.escalation,
     )
     samples = load_split(args.split, args.max_samples)
@@ -153,6 +170,8 @@ def cmd_run_all(args):
                 depth_epsilon=args.depth_epsilon,
                 confidence_threshold=args.confidence_threshold,
                 load_models=True,
+                vlm_backend=args.backend,
+                api_base_url=args.api_base_url,
             )
             samples = load_split(args.split, args.max_samples)
             results = infer_split(pipeline, samples, ofile, desc=f"{mshort} {tag}")
@@ -194,6 +213,8 @@ def cmd_single(args):
         device=args.device or get_device(),
         enable_modules=modules,
         load_models=True,
+        vlm_backend=args.backend,
+        api_base_url=args.api_base_url,
     )
     image = Image.open(args.image).convert("RGB")
     sample = {
@@ -268,6 +289,7 @@ Examples:
     sp.add_argument("--escalation", action="store_true",
                    help="Bật escalation logic: zero-shot first, augment on disagreement")
 
+    _add_vlm_backend_args(sp)
     # run-all: chạy baseline + full ASTRA cho nhiều model
     sp = sub.add_parser("run-all")
     sp.add_argument("--models", nargs="+", required=True,
@@ -280,6 +302,7 @@ Examples:
     sp.add_argument("--depth-epsilon", type=float, default=DEPTH_EPSILON)
     sp.add_argument("--confidence-threshold", type=float, default=CONFIDENCE_THRESHOLD)
     sp.add_argument("--save-summary", default=None)
+    _add_vlm_backend_args(sp)
 
     # compare: so sánh kết quả
     sp = sub.add_parser("compare")
@@ -294,6 +317,7 @@ Examples:
     sp.add_argument("--options", required=True)
     sp.add_argument("--modules", default="1,2,3")
     sp.add_argument("--device", default=None)
+    _add_vlm_backend_args(sp)
 
     return p
 
