@@ -242,40 +242,55 @@ class ASTRAPipeline:
                 pp = prompts.build_baseline_prompt(question, perm_opts)
             try:
                 output = self._generate(image, pp)
-            except Exception:
-                output = ""
+            except Exception as exc:
+                raise RuntimeError(f"ODV generation failed for options {perm_opts}: {exc}") from exc
             parsed = odv.parse_answer_from_output(output, perm_opts, options)
             votes.append(parsed)
         valid = [v for v in votes if v is not None]
         if not valid:
-            return votes[0] if votes else (options[0] if options else "")
-        _, _, vc = odv.vote_answers(valid)
-        return vc.most_common(1)[0][0]
+            return options[0] if options else ""
+        winner, _, _ = odv.vote_answers(valid)
+        return winner
 
-    def _generate(self, image: Image.Image, prompt: str) -> str:
-        image_data = image.convert("RGB")
-        messages = [{"role": "user", "content": [
-            {"type": "image", "image": image_data},
-            {"type": "text", "text": prompt},
-        ]}]
+    def _prepare_generation_inputs(self, images: list[Image.Image], prompt: str):
+        messages = [{"role": "user", "content": []}]
+        for img in images:
+            messages[0]["content"].append({"type": "image", "image": img})
+        messages[0]["content"].append({"type": "text", "text": prompt})
+
+        chat_text = (
+            self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            if hasattr(self.processor, "apply_chat_template") else prompt
+        )
 
         try:
-            chat_text = self.processor.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            ) if hasattr(self.processor, "apply_chat_template") else prompt
-            inputs = self.processor(
-                text=[chat_text],
-                images=[image_data],
-                return_tensors="pt",
-                padding=True,
-            ).to(self.device)
-        except Exception:
-            inputs = self.processor(
-                text=messages,
-                images=image_data,
-                return_tensors="pt",
-                padding=True,
-            ).to(self.device)
+            from qwen_vl_utils import process_vision_info
+            image_inputs, video_inputs = process_vision_info(messages)
+            processor_kwargs = {
+                "text": [chat_text],
+                "images": image_inputs,
+                "return_tensors": "pt",
+                "padding": True,
+            }
+            if video_inputs is not None:
+                processor_kwargs["videos"] = video_inputs
+            return self.processor(**processor_kwargs).to(self.device)
+        except Exception as qwen_exc:
+            try:
+                return self.processor(
+                    text=[chat_text],
+                    images=images,
+                    return_tensors="pt",
+                    padding=True,
+                ).to(self.device)
+            except Exception as fallback_exc:
+                raise RuntimeError(
+                    "Failed to prepare Qwen-VL inputs "
+                    f"(qwen_vl_utils: {qwen_exc}; fallback: {fallback_exc})"
+                ) from fallback_exc
+
+    def _generate(self, image: Image.Image, prompt: str) -> str:
+        inputs = self._prepare_generation_inputs([image.convert("RGB")], prompt)
 
         with torch.no_grad():
             output_ids = self.model.generate(
@@ -302,7 +317,7 @@ class ASTRAPipeline:
                 image = None
         if image is None:
             return {"id": sample.get("id", 0), "predicted": "", "correct": False,
-                    "error": "Failed to load image", **sample}
+                    "error": "Failed to load image", "t_total": time.time() - t0, **sample}
 
         question = sample.get("question", "")
         options = sample.get("options", [])
@@ -459,7 +474,7 @@ class ASTRAPipeline:
                 image = None
         if image is None:
             return {"id": sample.get("id", 0), "predicted": "", "correct": False,
-                    "error": "Failed to load image", **sample}
+                    "error": "Failed to load image", "t_total": time.time() - t0, **sample}
 
         question = sample.get("question", "")
         options = sample.get("options", [])
@@ -470,7 +485,7 @@ class ASTRAPipeline:
         t_pre = time.time() - t_pre
 
         t_fwd = time.time()
-        predicted = self.forward(image, question, options, preprocessed)
+        predicted = self.forward(image, question, options, preprocessed) or ""
         t_fwd = time.time() - t_fwd
 
         pred_norm = normalize_relation(predicted, options) or predicted
@@ -645,9 +660,9 @@ class ASTRAPipeline:
         pred = normalize_relation(output, perm_opts)
         if pred is None:
             return None
-        idx = perm_opts.index(pred) if pred in perm_opts else -1
-        if idx >= 0 and idx < len(original_opts):
-            return original_opts[idx]
+        for original in original_opts:
+            if original.strip().lower() == pred.strip().lower():
+                return original
         return pred
 
     def _generate_v2(self, image1: Image.Image, image2: Image.Image | None, prompt: str) -> str:
@@ -656,28 +671,7 @@ class ASTRAPipeline:
         if image2 is not None:
             images.append(image2.convert("RGB"))
 
-        messages = [{"role": "user", "content": []}]
-        for img in images:
-            messages[0]["content"].append({"type": "image", "image": img})
-        messages[0]["content"].append({"type": "text", "text": prompt})
-
-        try:
-            chat_text = self.processor.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            ) if hasattr(self.processor, "apply_chat_template") else prompt
-            inputs = self.processor(
-                text=[chat_text],
-                images=images,
-                return_tensors="pt",
-                padding=True,
-            ).to(self.device)
-        except Exception:
-            inputs = self.processor(
-                text=messages,
-                images=images,
-                return_tensors="pt",
-                padding=True,
-            ).to(self.device)
+        inputs = self._prepare_generation_inputs(images, prompt)
 
         with torch.no_grad():
             output_ids = self.model.generate(

@@ -85,15 +85,15 @@ def generate_permutations(options, n):
 
 
 def parse_answer(output: str, perm_opts, original_opts) -> str | None:
-    """Parse answer từ VLM output, chuẩn hóa về original option."""
+    """Parse VLM output and normalize to original option text."""
     if not output:
         return None
     pred = normalize_relation(output, perm_opts)
     if pred is None:
         return None
-    idx = perm_opts.index(pred) if pred in perm_opts else -1
-    if idx >= 0 and idx < len(original_opts):
-        return original_opts[idx]
+    for original in original_opts:
+        if original.strip().lower() == pred.strip().lower():
+            return original
     return pred
 
 

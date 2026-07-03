@@ -47,21 +47,40 @@ def map_letter_to_content(letter: str, options: list) -> Optional[str]:
 
 def parse_answer_from_output(output_text: str, perm_opts: list, original_opts: list) -> Optional[str]:
     text = output_text.strip()
-    m = re.search(r'answer[:\s]+[\(\[]?([A-F])[\)\]]?', text, re.IGNORECASE)
+
+    def canonical(option: str) -> str:
+        for original in original_opts:
+            if original.strip().lower() == option.strip().lower():
+                return original
+        return option
+
+    m = re.search(r'answer[:\s]+[\(\[]?\s*([A-F])\s*[\)\]]?(?=\s|$|[:.,;-])', text, re.IGNORECASE)
     if m:
         content = map_letter_to_content(m.group(1).upper(), perm_opts)
         if content:
-            return original_opts[perm_opts.index(content)]
-    for i, opt in enumerate(perm_opts):
+            return canonical(content)
+
+    try:
+        from utils.utils import normalize_relation
+        parsed = normalize_relation(text, perm_opts)
+        if parsed:
+            return canonical(parsed)
+    except Exception:
+        pass
+
+    for opt in perm_opts:
         if opt.lower() in text.lower():
-            return original_opts[i]
+            return canonical(opt)
     REL_KW = {
-        "in front of", "behind", "beside", "left of", "right of", "above", "below",
+        "on/above", "in front of", "behind", "beside", "left of", "right of", "above", "below",
     }
     text_lower = text.lower()
     for kw in REL_KW:
-        if kw in text_lower and kw in original_opts:
-            return kw
+        if kw in text_lower:
+            if kw == "above":
+                return canonical("on/above") if "on/above" in original_opts else canonical(kw)
+            if kw in original_opts:
+                return canonical(kw)
     return None
 
 
@@ -70,41 +89,43 @@ def vote_answers(answers: list) -> tuple:
     most_common = counter.most_common(1)
     if not most_common:
         return answers[0] if answers else "", 0, counter
-    return most_common[0]
+    winner, count = most_common[0]
+    return winner, count, counter
 
 
 def query_model_once(model, processor, image, prompt: str, device: str = "cuda", max_new_tokens: int = 128) -> str:
+    image_data = image.convert("RGB")
+    messages = [{"role": "user", "content": [
+        {"type": "image", "image": image_data},
+        {"type": "text", "text": prompt},
+    ]}]
+    chat_text = (
+        processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        if hasattr(processor, "apply_chat_template") else prompt
+    )
+
     try:
         from qwen_vl_utils import process_vision_info
-        image_data = image.convert("RGB")
-        pixel_values, image_grid, _ = process_vision_info(
-            {"image": image_data}, return_image_grid=True
-        )
-        text_input = [{"role": "user", "content": [
-            {"type": "image", "image": "placeholder"},
-            {"type": "text", "text": prompt},
-        ]}]
+        image_inputs, video_inputs = process_vision_info(messages)
         inputs = processor(
-            text=text_input, images=image_data, return_tensors="pt", padding=True
+            text=[chat_text],
+            images=image_inputs,
+            videos=video_inputs,
+            return_tensors="pt",
+            padding=True,
         ).to(device)
-        if pixel_values is not None and hasattr(pixel_values, "to"):
-            inputs["pixel_values"] = pixel_values.to(device)
-        if image_grid is not None and hasattr(image_grid, "to"):
-            inputs["image_grid"] = image_grid.to(device)
-        with torch.no_grad():
-            output_ids = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
-        ilen = inputs["input_ids"].shape[1]
-        return processor.batch_decode(output_ids[:, ilen:], skip_special_tokens=True)[0].strip()
     except Exception:
         inputs = processor(
-            text=[{"role": "user", "content": [
-                {"type": "image", "image": image}, {"type": "text", "text": prompt}
-            ]}], images=image, return_tensors="pt"
+            text=[chat_text],
+            images=[image_data],
+            return_tensors="pt",
+            padding=True,
         ).to(device)
-        with torch.no_grad():
-            output_ids = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
-        ilen = inputs["input_ids"].shape[1]
-        return processor.batch_decode(output_ids[:, ilen:], skip_special_tokens=True)[0].strip()
+
+    with torch.no_grad():
+        output_ids = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+    ilen = inputs["input_ids"].shape[1]
+    return processor.batch_decode(output_ids[:, ilen:], skip_special_tokens=True)[0].strip()
 
 
 def run_odv(
@@ -131,8 +152,8 @@ def run_odv(
 
         try:
             output_text = query_model_once(model, processor, image, perm_prompt, device, max_new_tokens)
-        except Exception:
-            output_text = ""
+        except Exception as exc:
+            raise RuntimeError(f"ODV generation failed for options {perm_opts}: {exc}") from exc
 
         raw_outputs.append(output_text)
         parsed = parse_answer_from_output(output_text, perm_opts, original_options)
@@ -140,7 +161,8 @@ def run_odv(
 
     valid = [v for v in votes if v is not None]
     if not valid:
-        final = votes[0] if votes else original_options[0]
+        final = original_options[0] if original_options else ""
+        wc = 0
         vc = Counter()
     else:
         final, wc, vc = vote_answers(valid)

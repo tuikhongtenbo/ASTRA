@@ -10,6 +10,7 @@ import re
 from typing import Optional
 
 import numpy as np
+from PIL import Image
 
 from config.config import RELATIONS, AXIS_MAP
 
@@ -33,7 +34,7 @@ def normalize_relation(text: str, options: list) -> Optional[str]:
         return None
     text_lower = text.lower()
 
-    ans_match = re.search(r'answer:\s*(?:\()?(A|B|C|D|E|F)(?:\))?', text, re.IGNORECASE)
+    ans_match = re.search(r'answer:\s*[\(\[]?\s*([A-F])\s*[\)\]]?(?=\s|$|[:.,;-])', text, re.IGNORECASE)
     if ans_match:
         letter = ans_match.group(1).upper()
         idx = ord(letter) - ord('A')
@@ -97,12 +98,22 @@ def find_image_path(image_dir: str, img_name: str) -> Optional[str]:
     p = os.path.join(image_dir, img_name)
     if os.path.exists(p):
         return p
+    parent = os.path.dirname(image_dir)
+    grandparent = os.path.dirname(parent)
     candidates = [
         os.path.join(image_dir, "relevant_images"),
-        os.path.join(os.path.dirname(image_dir), "relevant_images"),
-        os.path.join(os.path.dirname(os.path.dirname(image_dir)), "relevant_images"),
+        os.path.join(image_dir, "test_images"),
+        os.path.join(image_dir, "COCO2017"),
+        os.path.join(parent, "relevant_images"),
+        os.path.join(parent, "test_images"),
+        os.path.join(parent, "COCO2017"),
+        os.path.join(grandparent, "relevant_images"),
+        os.path.join(grandparent, "test_images"),
+        os.path.join(grandparent, "COCO2017"),
         "relevant_images",
         "dataset/images/relevant_images",
+        "dataset/images/test_images",
+        "dataset/images/COCO2017",
     ]
     for c in candidates:
         p = os.path.join(c, img_name)

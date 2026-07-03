@@ -10,6 +10,7 @@ import json
 import os
 import sys
 import time
+from collections import Counter
 
 import torch
 from tqdm import tqdm
@@ -74,6 +75,11 @@ def infer_split(pipeline: ASTRAPipeline, samples: list, output_file: str, desc: 
     avg = total_time / len(results) if results else 0
     print(f"\n[Result] {correct}/{len(results)} correct = {acc:.2f}%")
     print(f"[Time]   {avg:.2f}s/sample, total {format_time(total_time)}")
+    errors = Counter(r.get("error", "") for r in results if r.get("error"))
+    if errors:
+        print("[Errors] Top failures:")
+        for message, count in errors.most_common(3):
+            print(f"  {count}x {message}")
     return results
 
 
