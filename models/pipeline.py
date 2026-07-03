@@ -39,8 +39,7 @@ class ASTRAPipeline:
         n_perms: int = N_PERMS,
         depth_epsilon: float = DEPTH_EPSILON,
         confidence_threshold: float = CONFIDENCE_THRESHOLD,
-        grounding_model=None,
-        grounding_processor=None,
+        yoloe_model=None,
         depth_model=None,
         max_new_tokens: int = MAX_NEW_TOKENS,
         load_models: bool = True,
@@ -61,8 +60,7 @@ class ASTRAPipeline:
 
         self.model = None
         self.processor = None
-        self.grounding_model = grounding_model
-        self.grounding_processor = grounding_processor
+        self.yoloe_model = yoloe_model
         self.depth_model = depth_model
 
         if load_models:
@@ -70,8 +68,8 @@ class ASTRAPipeline:
 
     def _load_models(self):
         self._load_qwen_model()
-        if 1 in self.enable_modules and self.grounding_model is None:
-            self._load_grounding_model()
+        if 1 in self.enable_modules and self.yoloe_model is None:
+            self._load_yoloe_model()
         if 2 in self.enable_modules and self.depth_model is None:
             self._load_depth_model()
 
@@ -88,16 +86,16 @@ class ASTRAPipeline:
         self.model.eval()
         print(f"[Pipeline] Qwen3-VL loaded in {time.time() - t0:.1f}s")
 
-    def _load_grounding_model(self):
+    def _load_yoloe_model(self):
         try:
-            print("[Pipeline] Loading Grounding DINO-Tiny...")
+            print("[Pipeline] Loading YOLOE-26X...")
             t0 = time.time()
-            self.grounding_model, self.grounding_processor, _ = ogm.load_grounding_model(self.device)
-            print(f"[Pipeline] Grounding DINO loaded in {time.time() - t0:.1f}s")
-        except ImportError as e:
-            print(f"[Pipeline] Warning: Grounding DINO not loaded: {e}")
+            self.yoloe_model = ogm.load_yoloe_model(self.device)
+            print(f"[Pipeline] YOLOE-26X loaded in {time.time() - t0:.1f}s")
+        except Exception as e:
+            print(f"[Pipeline] Warning: YOLOE-26X not loaded: {e}")
             print("[Pipeline] Module 1 (OGM) will be skipped.")
-            self.grounding_model = None
+            self.yoloe_model = None
 
     def _load_depth_model(self):
         try:
@@ -119,12 +117,11 @@ class ASTRAPipeline:
             "ogm_success": False, "dlc_success": False,
         }
 
-        if 1 in self.enable_modules and self.grounding_model is not None:
+        if 1 in self.enable_modules and self.yoloe_model is not None:
             try:
                 r = ogm.run_ogm(
                     image=image, question=question,
-                    grounding_model=self.grounding_model,
-                    processor=self.grounding_processor,
+                    yoloe_model=self.yoloe_model,
                     device=self.device,
                     confidence_threshold=self.confidence_threshold,
                 )
@@ -329,12 +326,11 @@ class ASTRAPipeline:
                 O1_name, O2_name = None, None
                 O1_bbox, O2_bbox = None, None
 
-                if self.grounding_model is not None:
+                if self.yoloe_model is not None:
                     try:
                         r = ogm.run_ogm(
                             image=image, question=question,
-                            grounding_model=self.grounding_model,
-                            processor=self.grounding_processor,
+                            yoloe_model=self.yoloe_model,
                             device=self.device,
                             confidence_threshold=self.confidence_threshold,
                             extraction_result=extraction,
@@ -671,7 +667,7 @@ class ASTRAPipeline:
         )[0].strip()
 
     def unload(self):
-        for attr in ("model", "grounding_model", "depth_model"):
+        for attr in ("model", "yoloe_model", "depth_model"):
             obj = getattr(self, attr, None)
             if obj is not None:
                 del obj

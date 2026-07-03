@@ -5,15 +5,10 @@ Tái sử dụng và mở rộng từ CODA config.
 
 import os
 
-import sys
 
 # ======== PATHS ========
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Inject GroundingDINO to sys.path for Kaggle
-GD_PATH = os.path.join(BASE_DIR, "GroundingDINO")
-if GD_PATH not in sys.path:
-    sys.path.insert(0, GD_PATH)
 
 # Local data (copied from CODA)
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -60,8 +55,10 @@ MAX_NEW_TOKENS = 128
 MAX_IMAGE_SIZE = 1280
 
 # ======== MODULE PARAMETERS ========
-# Module 1 — OGM
+# Module 1 - OGM (YOLOE-26X bbox detection)
 CONFIDENCE_THRESHOLD = 0.3
+YOLOE_WEIGHTS = "yoloe-26x-seg.pt"
+YOLOE_IMGSZ = 640
 
 # Module 2 — DLC
 DEPTH_EPSILON = 0.05
@@ -78,24 +75,6 @@ AXIS_MAP = {
     "z": ["in front of", "behind"],
     "x": ["left of", "right of"],
 }
-
-# ======== COCO VOCABULARY ========
-COCO_CATEGORIES = [
-    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
-    "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat",
-    "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack",
-    "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball",
-    "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket",
-    "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
-    "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair",
-    "couch", "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse",
-    "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator",
-    "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush",
-    "building", "tree", "sky", "cloud", "mountain", "river", "sea", "street",
-    "carpet", "floor", "wall", "window", "door", "table", "curtain", "pillow", "blanket",
-    "plate", "basket", "bag", "box", "glass", "chopstick", "towel", "napkin", "mirror",
-    "shelf", "cabinet", "drawer", "sofa", "stool", "desk", "counter",
-]
 
 # ======== LLM EXTRACTOR (Module 1 pre-processing) ========
 EXTRACTOR_MODEL = "qwen3.7-max"

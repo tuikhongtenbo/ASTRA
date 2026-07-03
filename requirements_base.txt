@@ -1,12 +1,10 @@
-# requirements_base.txt — Base dependencies (without GroundingDINO)
-# Install AFTER cloning GroundingDINO:
-#   git clone https://github.com/IDEA-Research/GroundingDINO.git
-#   cd GroundingDINO && pip install -e . && cd ..
-#   pip install -r requirements_base.txt
+# requirements_base.txt - Base dependencies
+# Install with: pip install -r requirements_base.txt
 
 # Core
+ultralytics>=8.4.77
 torch>=2.1.0
-torchvision>=0.16.0
+torchvision>=0.22.1,<0.23.0
 transformers>=4.40.0
 accelerate>=0.28.0
 pillow>=10.0.0
@@ -25,3 +23,4 @@ depth-anything-v2
 # spaCy (for entity extraction in Module 1)
 spacy>=3.7.0
 # python -m spacy download en_core_web_sm
+

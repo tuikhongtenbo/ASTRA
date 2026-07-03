@@ -25,7 +25,7 @@ from config.pipeline_config import (
     DET_CONF_THRESHOLD,
 )
 from models.image_generator import (
-    generate_bbox_image, should_run_grounding, load_grounding_model,
+    generate_bbox_image, should_run_yoloe, load_yoloe_model,
 )
 
 
@@ -59,15 +59,15 @@ def main():
     if args.max_samples > 0:
         records = records[:args.max_samples]
 
-    # Load grounding model
-    print("[M1] Loading Grounding DINO...")
-    grounding_model, processor, device = None, None, args.device
+    # Load YOLOE model
+    print("[M1] Loading YOLOE-26X...")
+    yoloe_model, device = None, args.device
     try:
-        grounding_model, processor, device = load_grounding_model(args.device)
-        print(f"[M1] Grounding DINO loaded on {device}")
+        yoloe_model = load_yoloe_model(args.device)
+        print(f"[M1] YOLOE-26X loaded on {device}")
     except Exception as e:
-        print(f"[M1] WARNING: Could not load Grounding DINO: {e}")
-        print("[M1] Will still run but detect will fail for all samples.")
+        print(f"[M1] WARNING: Could not load YOLOE-26X: {e}")
+        print("[M1] Will still run but YOLOE detection will fail for all samples.")
 
     bbox_info = {}
     ok_count = 0
@@ -79,7 +79,7 @@ def main():
         img_name = record.get("image", "")
 
         # Confidence gating
-        if not should_run_grounding(record):
+        if not should_run_yoloe(record):
             skip_count += 1
             # Vẫn lưu ảnh gốc vào output để giữ đồng bộ id
             img_path = find_image_path(img_name)
@@ -116,8 +116,7 @@ def main():
         marked_img, box_info = generate_bbox_image(
             image=img,
             record=record,
-            grounding_model=grounding_model,
-            processor=processor,
+            yoloe_model=yoloe_model,
             device=device,
             det_threshold=DET_CONF_THRESHOLD,
         )

@@ -5,15 +5,10 @@ Tách riêng thresholds và visual config, không hard-code trong các module.
 
 import os
 
-import sys
 
 # ======== PATHS ========
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Inject GroundingDINO to sys.path for Kaggle
-GD_PATH = os.path.join(BASE_DIR, "GroundingDINO")
-if GD_PATH not in sys.path:
-    sys.path.insert(0, GD_PATH)
 
 DATA_DIR = os.path.join(BASE_DIR, "dataset", "data")
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
@@ -38,8 +33,10 @@ EXTRACTION_FILE = os.path.join(DATA_DIR, "test_objects_last.json")
 # Confidence gating: bỏ qua M1+M2 nếu extraction confidence thấp
 EXTRACT_CONF_THRESHOLD = 0.6
 
-# Grounding DINO detection threshold
+# YOLOE-26X detection settings
 DET_CONF_THRESHOLD = 0.35
+YOLOE_WEIGHTS = "yoloe-26x-seg.pt"
+YOLOE_IMGSZ = 640
 
 # ======== MODULE 2 — Depth ========
 # Ngưỡng chênh lệch depth để sinh depth_relation_text

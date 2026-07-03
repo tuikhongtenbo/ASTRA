@@ -32,7 +32,7 @@ from config.pipeline_config import (
 )
 from models.image_generator import (
     generate_bbox_image, compute_depth_cue, render_depth_image,
-    should_run_grounding, load_grounding_model, load_depth_model,
+    should_run_yoloe, load_yoloe_model, load_depth_model,
     depth_relation_text,
 )
 from models.prompt_v2 import build_prompt
@@ -117,12 +117,12 @@ def main():
 
     # Load models
     print("\n[Debug] Loading models...")
-    grounding_model, grounding_processor = None, None
+    yoloe_model = None
     try:
-        grounding_model, grounding_processor, _ = load_grounding_model(args.device)
-        print(f"[Debug] Grounding DINO loaded on {args.device}")
+        yoloe_model = load_yoloe_model(args.device)
+        print(f"[Debug] YOLOE-26X loaded on {args.device}")
     except Exception as e:
-        print(f"[Debug] WARNING: Grounding DINO failed: {e}")
+        print(f"[Debug] WARNING: YOLOE-26X failed: {e}")
 
     depth_model = None
     try:
@@ -167,7 +167,7 @@ def main():
         }
 
         # ── Confidence gating check ──
-        gating_pass = should_run_grounding(record)
+        gating_pass = should_run_yoloe(record)
         meta["gating_pass"] = gating_pass
 
         # ── Module 1: Bbox ──
@@ -179,8 +179,7 @@ def main():
             marked_img, box_info = generate_bbox_image(
                 image=img,
                 record=record,
-                grounding_model=grounding_model,
-                processor=grounding_processor,
+                yoloe_model=yoloe_model,
                 device=args.device,
                 det_threshold=DET_CONF_THRESHOLD,
             )

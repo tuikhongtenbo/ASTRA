@@ -1,17 +1,16 @@
 """
 Module 1 — Object-Grounded Marking (OGM)
-Detect bbox cho O1, O2 bằng Grounding DINO, vẽ [1], [2] lên ảnh.
+Detect bbox cho O1, O2 bang YOLOE-26X, ve [1], [2] len anh.
 """
 
 from __future__ import annotations
 
 import re
-from typing import Optional
+from typing import Any, Optional
 
-import torch
 from PIL import Image, ImageDraw, ImageFont
 
-from config.config import COCO_CATEGORIES, CONFIDENCE_THRESHOLD, DET_CONF_THRESHOLD
+from config.config import CONFIDENCE_THRESHOLD, DET_CONF_THRESHOLD, YOLOE_IMGSZ, YOLOE_WEIGHTS
 
 # ─── Legacy alias (ablation compatibility) ──────────────────────────────────
 
@@ -229,131 +228,111 @@ def _clean_entity(entity: str) -> str:
     return entity.strip()
 
 
-def best_match(entity: str, vocabulary: list[str]) -> str:
-    entity_lower = entity.lower().strip()
-    if entity_lower in vocabulary:
-        return entity_lower
-    for v in vocabulary:
-        if entity_lower in v or v in entity_lower:
-            return v
-    return entity_lower
+def _entity_prompt(entity: str) -> str:
+    """Normalize a text prompt for YOLOE without collapsing descriptors."""
+    return (entity or "").strip().rstrip(".")
 
 
-def load_grounding_model(device: str = "cuda"):
-    """
-    Load Grounding DINO từ local repo clone + local weights.
-    Cách cài đặt:
-      git clone https://github.com/IDEA-Research/GroundingDINO.git
-      mkdir -p GroundingDINO/weights
-      wget https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth \\
-          -O GroundingDINO/weights/groundingdino_swint_ogc.pth
-      pip install -e GroundingDINO
-    """
-    import os
-    import sys as _sys
+def load_yoloe_model(device: str = "cuda", weights: str = YOLOE_WEIGHTS):
+    """Load YOLOE-26X directly through the Ultralytics YOLOE API."""
+    from ultralytics import YOLOE
 
-    _base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    _gd_path = os.path.join(_base, "GroundingDINO")
-    if _gd_path not in _sys.path:
-        _sys.path.insert(0, _gd_path)
-
-    _patch_transformers_compat()
-
-    _cfg = os.path.join(_gd_path, "groundingdino", "config", "GroundingDINO_SwinT_OGC.py")
-    _ckpt = os.path.join(_gd_path, "weights", "groundingdino_swint_ogc.pth")
-
-    if not os.path.exists(_cfg) or not os.path.exists(_ckpt):
-        raise FileNotFoundError(
-            f"GroundingDINO config or checkpoint not found.\n"
-            f"  Config: {_cfg}\n  Checkpoint: {_ckpt}\n"
-            f"Download: wget https://github.com/IDEA-Research/GroundingDINO/releases/"
-            f"download/v0.1.0-alpha/groundingdino_swint_ogc.pth -O {_ckpt}"
-        )
-
-    from groundingdino.util.inference import load_model as _gd_load
-    model = _gd_load(_cfg, _ckpt, device=device)
-    model.eval()
-    return model, None, device
+    model = YOLOE(weights)
+    if device:
+        try:
+            model.to(device)
+        except Exception:
+            # Ultralytics also accepts device during predict(); keep loading robust.
+            pass
+    return model
 
 
-def _patch_transformers_compat():
-    """Monkey-patch transformers >= 4.31: thêm get_head_mask cho BertPreTrainedModel."""
-    try:
-        import transformers.models.bert.modeling_bert as _bm
-        from transformers.modeling_utils import PreTrainedModel
-        if not hasattr(_bm.BertPreTrainedModel, "get_head_mask"):
-            _bm.BertPreTrainedModel.get_head_mask = PreTrainedModel.get_head_mask
-        if not hasattr(_bm.BertModel, "get_head_mask"):
-            _bm.BertModel.get_head_mask = PreTrainedModel.get_head_mask
-    except Exception:
-        pass
-    try:
-        import groundingdino.models.GroundingDINO.bertwarper as _bw
-        from transformers.modeling_utils import PreTrainedModel
-        if not hasattr(_bw.BertModelWarper, "get_head_mask"):
-            _bw.BertModelWarper.get_head_mask = PreTrainedModel.get_head_mask
-    except Exception:
-        pass
+def _as_list(value: Any) -> list:
+    if value is None:
+        return []
+    if hasattr(value, "detach"):
+        value = value.detach()
+    if hasattr(value, "cpu"):
+        value = value.cpu()
+    if hasattr(value, "numpy"):
+        value = value.numpy()
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    return value if isinstance(value, list) else list(value)
 
 
-def detect_objects(
+def _normalize_xyxy(xyxy: list, width: int, height: int) -> list | None:
+    if width <= 0 or height <= 0 or len(xyxy) < 4:
+        return None
+    x1, y1, x2, y2 = [float(v) for v in xyxy[:4]]
+    x1 = max(0.0, min(float(width), x1))
+    x2 = max(0.0, min(float(width), x2))
+    y1 = max(0.0, min(float(height), y1))
+    y2 = max(0.0, min(float(height), y2))
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return [x1 / width, y1 / height, x2 / width, y2 / height]
+
+
+def detect_yoloe_objects(
     image: Image.Image,
     entities: list[str],
-    grounding_model=None,
-    processor=None,
+    yoloe_model=None,
     device: str = "cuda",
-    threshold: float = 0.3,
+    threshold: float = DET_CONF_THRESHOLD,
+    imgsz: int = YOLOE_IMGSZ,
 ) -> dict:
     """
-    Detect entities trên ảnh bằng Grounding DINO.
-    Dùng groundingdino.util.inference.predict() — đúng cách từ notebook reference.
+    Detect entities with YOLOE text prompts.
+
+    Returns {entity: {"bbox": [x1, y1, x2, y2] | None, "score": float}},
+    where bbox coordinates are normalized to [0, 1].
     """
-    if grounding_model is None:
-        grounding_model, processor, device = load_grounding_model(device)
+    valid_entities = [entity for entity in entities if entity and str(entity).strip()]
+    results = {entity: {"bbox": None, "score": 0.0} for entity in valid_entities}
+    prompts = [_entity_prompt(entity) for entity in valid_entities]
+    if yoloe_model is None or not prompts:
+        return results
 
-    from groundingdino.util.inference import load_image as _load_img, predict as _predict
+    try:
+        yoloe_model.set_classes(prompts)
+        predictions = yoloe_model.predict(
+            image.convert("RGB"),
+            conf=threshold,
+            imgsz=imgsz,
+            device=device,
+            verbose=False,
+        )
+    except Exception:
+        return results
 
-    import numpy as np
+    if not predictions:
+        return results
 
-    results = {}
-    for entity in entities:
-        if not entity:
+    boxes = getattr(predictions[0], "boxes", None)
+    if boxes is None or len(boxes) == 0:
+        return results
+
+    xyxy_values = _as_list(getattr(boxes, "xyxy", None))
+    conf_values = _as_list(getattr(boxes, "conf", None))
+    cls_values = _as_list(getattr(boxes, "cls", None))
+    width, height = image.size
+
+    entity_by_class = dict(enumerate(valid_entities))
+
+    for xyxy, score, cls_id in zip(xyxy_values, conf_values, cls_values):
+        cls_idx = int(cls_id)
+        entity = entity_by_class.get(cls_idx)
+        if entity is None:
             continue
-        text_prompt = entity.strip().rstrip(".") + "."
-        try:
-            with torch.no_grad():
-                # Lưu ảnh tạm để predict (load_image cần path)
-                import tempfile, os as _os
-                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False, mode="wb") as f:
-                    image.save(f.name)
-                    tmp_path = f.name
-                try:
-                    _, image_tensor = _load_img(tmp_path)
-                    boxes, logits, phrases = _predict(
-                        model=grounding_model,
-                        image=image_tensor,
-                        caption=text_prompt,
-                        box_threshold=threshold,
-                        text_threshold=0.25,
-                        device=device,
-                    )
-                finally:
-                    _os.unlink(tmp_path)
+        score = float(score)
+        if score < threshold or score <= results[entity]["score"]:
+            continue
+        bbox = _normalize_xyxy(xyxy, width, height)
+        if bbox is None:
+            continue
+        results[entity] = {"bbox": bbox, "score": score}
 
-                if boxes is None or len(boxes) == 0:
-                    results[entity] = {"bbox": None, "score": 0.0}
-                    continue
-
-                best_idx = int(torch.argmax(logits))
-                score = float(logits[best_idx])
-                cx, cy, bw, bh = boxes[best_idx].tolist()
-                x1 = max(0.0, cx - bw / 2)
-                y1 = max(0.0, cy - bh / 2)
-                x2 = min(1.0, cx + bw / 2)
-                y2 = min(1.0, cy + bh / 2)
-                results[entity] = {"bbox": [x1, y1, x2, y2], "score": score}
-        except Exception:
-            results[entity] = {"bbox": None, "score": 0.0}
     return results
 
 
@@ -390,16 +369,15 @@ def draw_marks(
 def run_ogm(
     image: Image.Image,
     question: str,
-    grounding_model=None,
-    processor=None,
+    yoloe_model=None,
     device: str = "cuda",
     confidence_threshold: float = CONFIDENCE_THRESHOLD,
-    coco_vocabulary: list = None,
     extraction_result=None,
     O2_is_viewer: bool = False,
+    imgsz: int = YOLOE_IMGSZ,
 ) -> dict:
     """
-    Detect and mark O1/O2 on image using Grounding DINO.
+    Detect and mark O1/O2 on image using YOLOE-26X.
 
     Accepts either legacy tuple-based extraction (O1_raw, O2_raw) or
     ExtractionResult from the LLM extractor.
@@ -407,8 +385,6 @@ def run_ogm(
     All-or-nothing: both O1 and O2 must pass detection confidence.
     O2_is_viewer=True skips O2 detection (viewer has no physical bbox).
     """
-    vocab = coco_vocabulary or COCO_CATEGORIES
-
     if extraction_result is not None:
         O1_raw = extraction_result.O1
         O2_raw = extraction_result.O2 if not O2_is_viewer else None
@@ -419,54 +395,45 @@ def run_ogm(
     if O1_raw is None or (O2_raw is None and not O2_is_viewer):
         return _fail_result(image, O1_raw, O2_raw)
 
-    O1_name = best_match(O1_raw, vocab)
-    O2_name = best_match(O2_raw, vocab) if O2_raw else None
+    O1_name = _entity_prompt(O1_raw)
+    O2_name = _entity_prompt(O2_raw) if O2_raw else None
 
-    # Detect O1 always
-    detections = {}
-    if grounding_model is not None:
-        o1_results = detect_objects(
-            image, [O1_name],
-            grounding_model=grounding_model,
-            processor=processor,
-            device=device,
-            threshold=confidence_threshold,
-        )
-        detections.update(o1_results)
+    if yoloe_model is None:
+        yoloe_model = load_yoloe_model(device)
 
-        # Detect O2 only if O2_is_viewer=False (viewer has no physical bbox)
-        if not O2_is_viewer and O2_name:
-            o2_results = detect_objects(
-                image, [O2_name],
-                grounding_model=grounding_model,
-                processor=processor,
-                device=device,
-                threshold=confidence_threshold,
-            )
-            detections.update(o2_results)
+    entities = [O1_name]
+    if not O2_is_viewer and O2_name:
+        entities.append(O2_name)
 
-    O1_det = detections.get(O1_name, {"bbox": [0,0,0,0], "score": 0.0})
-    O1_bbox = O1_det.get("bbox", [0,0,0,0])
+    detections = detect_yoloe_objects(
+        image=image,
+        entities=entities,
+        yoloe_model=yoloe_model,
+        device=device,
+        threshold=confidence_threshold,
+        imgsz=imgsz,
+    )
+
+    O1_det = detections.get(O1_name, {"bbox": None, "score": 0.0})
+    O1_bbox = O1_det.get("bbox")
     O1_conf = O1_det.get("score", 0.0)
-    O2_bbox, O2_conf = [0,0,0,0], 0.0
-    if not O2_is_viewer:
-        O2_det = detections.get(O2_name, {"bbox": [0,0,0,0], "score": 0.0})
-        O2_bbox = O2_det.get("bbox", [0,0,0,0])
+    O2_bbox, O2_conf = None, 0.0
+    if not O2_is_viewer and O2_name:
+        O2_det = detections.get(O2_name, {"bbox": None, "score": 0.0})
+        O2_bbox = O2_det.get("bbox")
         O2_conf = O2_det.get("score", 0.0)
 
-    # All-or-nothing: both must pass threshold (O2 skipped if viewer)
-    both_pass = O1_conf >= confidence_threshold
+    both_pass = O1_bbox is not None and O1_conf >= confidence_threshold
     if not O2_is_viewer:
-        both_pass = both_pass and (O2_conf >= confidence_threshold)
+        both_pass = both_pass and O2_bbox is not None and O2_conf >= confidence_threshold
 
     if not both_pass:
         return _fail_result(image, O1_name, O2_name)
 
-    # Draw only the boxes that passed threshold
     det_for_draw = {}
-    if O1_conf >= confidence_threshold:
+    if O1_bbox is not None:
         det_for_draw[O1_name] = (O1_bbox, O1_conf)
-    if not O2_is_viewer and O2_conf >= confidence_threshold and O2_name:
+    if not O2_is_viewer and O2_bbox is not None and O2_name:
         det_for_draw[O2_name] = (O2_bbox, O2_conf)
 
     marked_image = draw_marks(image, det_for_draw) if det_for_draw else image
@@ -475,8 +442,8 @@ def run_ogm(
         "marked_image": marked_image,
         "O1_name": O1_name,
         "O2_name": O2_name if not O2_is_viewer else None,
-        "O1_bbox": O1_bbox if O1_conf >= confidence_threshold else None,
-        "O2_bbox": O2_bbox if (not O2_is_viewer and O2_conf >= confidence_threshold) else None,
+        "O1_bbox": O1_bbox,
+        "O2_bbox": O2_bbox if not O2_is_viewer else None,
         "O1_conf": O1_conf,
         "O2_conf": O2_conf,
         "success": both_pass,

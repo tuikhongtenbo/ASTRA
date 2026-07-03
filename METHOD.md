@@ -35,7 +35,7 @@ flowchart TD
     
     Input_Image --> M1
     Entities --> M1
-    M1 -.->|"Grounding DINO"| Marked_Image["Ảnh đã đánh dấu Set-of-Mark"]
+    M1 -.->|"YOLOE-26X"| Marked_Image["Ảnh đã đánh dấu Set-of-Mark"]
     
     Input_Image --> M2
     Entities --> M2
@@ -75,11 +75,11 @@ flowchart TD
 
 **Phương pháp (OGM):**
 1. **Trích xuất Thực thể:** Từ câu hỏi của người dùng, module sử dụng LLM (hoặc Regex truyền thống) để trích xuất ra hai đối tượng chính cần quan tâm: `O1` và `O2`. (VD: Câu hỏi: *"Where is the dog relative to the cat?"* -> `O1`: dog, `O2`: cat).
-2. **Phát hiện Vị trí:** Sử dụng mô hình **Grounding DINO-Tiny** (rất nhẹ, ~172M parameters) nhận đầu vào là ảnh gốc và prompt text (`O1`, `O2`) để dự đoán Bounding Box của chúng trên ảnh.
+2. **Phát hiện Vị trí:** Sử dụng mô hình **YOLOE-26X** nhận đầu vào là ảnh gốc và prompt text (`O1`, `O2`) để dự đoán Bounding Box của chúng trên ảnh.
 3. **Đánh dấu Trực quan (Set-of-Mark):** 
    - ASTRA tự động vẽ các hộp đỏ và nhãn trực quan lên hình. Cụ thể, O1 được đánh dấu là `[1]` và O2 được đánh dấu là `[2]`.
    - Các nhãn này giúp Qwen3-VL chú ý trực tiếp vào vùng không gian quan trọng.
-4. **Cơ chế Fallback:** Nếu Grounding DINO có độ tin cậy (confidence score) thấp hơn một ngưỡng quy định (ví dụ `< 0.3`), module sẽ đánh giá là nhận diện thất bại và bỏ qua việc vẽ lên ảnh, hệ thống sẽ tự động dùng ảnh gốc để tránh hiện tượng đánh dấu sai làm nhiễu VLM (Cascading errors).
+4. **Cơ chế Fallback:** Nếu YOLOE-26X có độ tin cậy (confidence score) thấp hơn một ngưỡng quy định (ví dụ `< 0.3`), module sẽ đánh giá là nhận diện thất bại và bỏ qua việc vẽ lên ảnh, hệ thống sẽ tự động dùng ảnh gốc để tránh hiện tượng đánh dấu sai làm nhiễu VLM (Cascading errors).
 
 ---
 

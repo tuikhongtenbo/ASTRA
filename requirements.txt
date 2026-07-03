@@ -1,7 +1,4 @@
 # ASTRA Dependencies
-# Install order:
-#   1. git clone https://github.com/IDEA-Research/GroundingDINO.git
-#   2. cd GroundingDINO && pip install -e . && cd ..
-#   3. pip install -r requirements.txt
+# Install with: pip install -r requirements.txt
 
 -r requirements_base.txt

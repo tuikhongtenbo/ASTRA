@@ -20,12 +20,12 @@ if str(_REPO_ROOT) not in sys.path:
 from PIL import Image
 
 from config.pipeline_config import (
-    IMAGE_DIR, M1_OUTPUT_DIR, M2_OUTPUT_DIR, M2_DEPTH_INFO_FILE,
+    IMAGE_DIR, M1_OUTPUT_DIR, M1_BBOX_INFO_FILE, M2_OUTPUT_DIR, M2_DEPTH_INFO_FILE,
     DEPTH_MODEL_SIZE, DEPTH_COLORMAP,
 )
 from models.image_generator import (
     compute_depth_cue, render_depth_image,
-    load_depth_model, should_run_grounding,
+    load_depth_model, should_run_yoloe,
 )
 
 
@@ -44,7 +44,7 @@ def main():
     with open(args.bbox_info, "r", encoding="utf-8") as f:
         bbox_info = json.load(f)
 
-    # Load extraction để lấy record gốc (cho should_run_grounding)
+    # Load extraction để lấy record gốc (cho should_run_yoloe)
     from config.pipeline_config import EXTRACTION_FILE
     with open(EXTRACTION_FILE, "r", encoding="utf-8") as f:
         extraction_records = {str(r["id"]): r for r in json.load(f)}
@@ -72,7 +72,7 @@ def main():
         record = extraction_records.get(sid, {})
 
         # Confidence gating (lặp lại để đồng bộ)
-        if not should_run_grounding(record):
+        if not should_run_yoloe(record):
             skip_count += 1
             depth_info[sid] = {
                 "depth_ok": False,

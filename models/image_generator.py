@@ -19,6 +19,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from config.pipeline_config import (
     DET_CONF_THRESHOLD,
+    YOLOE_IMGSZ,
     MARK_COLOR_O1,
     MARK_COLOR_O2,
     BBOX_BORDER_WIDTH,
@@ -30,16 +31,15 @@ from config.pipeline_config import (
     COLORBAR_MARGIN_PX,
     DEPTH_COLORMAP,
 )
+from .module1_ogm import detect_yoloe_objects, load_yoloe_model
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Module 1 — Bbox Marking
 # ─────────────────────────────────────────────────────────────────────────────
 
-def should_run_grounding(record: dict) -> bool:
-    """
-    Confidence gating: chỉ chạy M1+M2 nếu extraction đủ tin cậy.
-    """
+def should_run_yoloe(record: dict) -> bool:
+    """Confidence gating: only run M1+M2 when extraction is reliable."""
     if record.get("confidence", 0.0) < 0.6:
         return False
     if record.get("O1_hallucinated", False) or record.get("O2_hallucinated", False):
@@ -47,166 +47,32 @@ def should_run_grounding(record: dict) -> bool:
     return True
 
 
-def _patch_groundingdino_transformers_compat():
-    """
-    Monkey-patch để GroundingDINO tương thích với transformers >= 4.31.
-    Lỗi gốc: 'BertModel' object has no attribute 'get_head_mask'
-    Nguyên nhân: transformers mới di chuyển get_head_mask sang PreTrainedModel
-    nhưng BertPreTrainedModel trong GroundingDINO không kế thừa đúng.
-    """
-    try:
-        import transformers.models.bert.modeling_bert as bert_module
-        
-        def dummy_get_head_mask(self, head_mask, num_hidden_layers, is_attention_chunked=False):
-            if head_mask is not None:
-                raise NotImplementedError("head_mask is not supported in this patch")
-            return [None] * num_hidden_layers
-
-        if not hasattr(bert_module.BertPreTrainedModel, "get_head_mask"):
-            bert_module.BertPreTrainedModel.get_head_mask = dummy_get_head_mask
-        if not hasattr(bert_module.BertModel, "get_head_mask"):
-            bert_module.BertModel.get_head_mask = dummy_get_head_mask
-    except Exception:
-        pass
-
-    try:
-        import groundingdino.models.GroundingDINO.bertwarper as bw
-        
-        def dummy_get_head_mask_bw(self, head_mask, num_hidden_layers, is_attention_chunked=False):
-            if head_mask is not None:
-                raise NotImplementedError("head_mask is not supported in this patch")
-            return [None] * num_hidden_layers
-            
-        for cls in [bw.BertModelWarper]:
-            if not hasattr(cls, "get_head_mask"):
-                cls.get_head_mask = dummy_get_head_mask_bw
-    except Exception:
-        pass
-
-
-def load_grounding_model(device: str = "cuda"):
-    """
-    Load Grounding DINO model và processor.
-    Hỗ trợ 2 cách cài:
-      1. git clone IDEA-Research/GroundingDINO → package 'groundingdino'
-      2. pip install grounding-dino            → package 'grounding_dino'
-    """
-    import sys
-    import os
-
-    # Inject thư mục GroundingDINO clone vào sys.path nếu chưa có
-    _base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    _gd_clone_path = os.path.join(_base, "GroundingDINO")
-    if os.path.isdir(_gd_clone_path) and _gd_clone_path not in sys.path:
-        sys.path.insert(0, _gd_clone_path)
-
-    # ── Thử import từ repo clone (IDEA-Research/GroundingDINO) ──
-    try:
-        # Patch trước khi import để tránh lỗi get_head_mask
-        _patch_groundingdino_transformers_compat()
-
-        from groundingdino.util.inference import load_model as gd_load_model
-
-        # Patch sau khi import (BertModelWarper có thể chưa tồn tại trước đó)
-        _patch_groundingdino_transformers_compat()
-
-        _cfg = os.path.join(
-            _gd_clone_path, "groundingdino", "config", "GroundingDINO_SwinT_OGC.py"
-        )
-        _ckpt = os.path.join(_gd_clone_path, "weights", "groundingdino_swint_ogc.pth")
-
-        if not os.path.exists(_cfg):
-            raise FileNotFoundError(f"Config không tìm thấy: {_cfg}")
-        if not os.path.exists(_ckpt):
-            raise FileNotFoundError(
-                f"Checkpoint không tìm thấy: {_ckpt}\n"
-                f"Tải về bằng lệnh:\n"
-                f"  mkdir -p {os.path.join(_gd_clone_path, 'weights')}\n"
-                f"  wget -q https://github.com/IDEA-Research/GroundingDINO/releases/"
-                f"download/v0.1.0-alpha/groundingdino_swint_ogc.pth -O {_ckpt}"
-            )
-
-        model = gd_load_model(_cfg, _ckpt, device=device)
-        model.eval()
-        # Trả về (model, None, device) — processor không cần, dùng API inference trực tiếp
-        return model, None, device
-
-    except Exception as e1:
-        # ── Fallback: pip install grounding-dino ──
-        try:
-            from grounding_dino.grounding_dino import load_model
-            from grounding_dino.grounding_dino_cfg import ModelConfig
-            config = ModelConfig()
-            model = load_model(config, "cogagent/grounding-dino-tiny")
-            model = model.to(device).eval()
-            try:
-                from transformers import AutoProcessor
-                processor = AutoProcessor.from_pretrained("cogagent/grounding-dino-tiny")
-            except Exception:
-                processor = None
-            return model, processor, device
-        except ImportError:
-            raise ImportError(
-                f"Grounding DINO not found. Install: pip install grounding-dino "
-                f"or check your PYTHONPATH."
-            )
-
-
 def _detect_single(
     image: Image.Image,
     text: str,
-    grounding_model,
-    processor,
+    yoloe_model,
     device: str,
     threshold: float,
+    imgsz: int = YOLOE_IMGSZ,
 ) -> tuple[Optional[list], float]:
     """
-    Detect một entity trên ảnh bằng Grounding DINO.
-    Returns (bbox_norm, score). bbox_norm = [x1, y1, x2, y2] normalized, hoặc None nếu fail.
+    Detect one entity with YOLOE-26X.
+    Returns (bbox_norm, score). bbox_norm = [x1, y1, x2, y2] normalized,
+    or None when detection fails.
     """
-    if grounding_model is None or not text.strip():
+    if yoloe_model is None or not text.strip():
         return None, 0.0
 
-    text_prompt = text.strip() + "."
-    try:
-        with torch.no_grad():
-            if processor is not None:
-                inputs = processor(
-                    images=image, texts=[text_prompt], return_tensors="pt"
-                ).to(device)
-                outputs = grounding_model(**inputs)
-            else:
-                from torchvision import transforms
-                img_resized = image.resize((640, 640)).convert("RGB")
-                transform = transforms.Compose([transforms.ToTensor()])
-                img_tensor = transform(img_resized).unsqueeze(0).to(device)
-                outputs = grounding_model(img_tensor, [text_prompt])
-
-        if hasattr(outputs, "pred_boxes"):
-            boxes = outputs.pred_boxes[0].cpu().numpy()
-            scores = outputs.scores[0].cpu().numpy() if hasattr(outputs, "scores") else np.array([1.0])
-        elif isinstance(outputs, (list, tuple)) and len(outputs) >= 2:
-            boxes = outputs[0][0].cpu().numpy()
-            scores = outputs[1][0].cpu().numpy() if len(outputs) > 1 else np.array([1.0])
-        else:
-            return None, 0.0
-
-        # best box
-        best_idx = int(np.argmax(scores))
-        best_score = float(scores[best_idx])
-
-        if best_score < threshold or best_idx >= len(boxes):
-            return None, best_score
-
-        cx, cy, bw, bh = boxes[best_idx]
-        x1 = max(0.0, cx - bw / 2)
-        y1 = max(0.0, cy - bh / 2)
-        x2 = min(1.0, cx + bw / 2)
-        y2 = min(1.0, cy + bh / 2)
-        return [float(x1), float(y1), float(x2), float(y2)], best_score
-
-    except Exception as e:
-        return None, 0.0
+    detections = detect_yoloe_objects(
+        image=image,
+        entities=[text],
+        yoloe_model=yoloe_model,
+        device=device,
+        threshold=threshold,
+        imgsz=imgsz,
+    )
+    result = detections.get(text, {})
+    return result.get("bbox"), float(result.get("score", 0.0))
 
 
 def _draw_box_outside_label(
@@ -263,19 +129,19 @@ def _draw_box_outside_label(
 def generate_bbox_image(
     image: Image.Image,
     record: dict,
-    grounding_model=None,
-    processor=None,
+    yoloe_model=None,
     device: str = "cuda",
     det_threshold: float = DET_CONF_THRESHOLD,
+    imgsz: int = YOLOE_IMGSZ,
 ) -> tuple[Image.Image, dict]:
     """
-    Module 1 — Detect O1/O2 bằng Grounding DINO, vẽ [1]/[2] lên ảnh.
+    Module 1 — Detect O1/O2 bang YOLOE-26X, vẽ [1]/[2] lên ảnh.
 
     Args:
         image: PIL.Image gốc (RGB)
         record: dict từ test_objects_last.json, có keys:
             Object.O1, Object.O2, O2_is_viewer, confidence
-        grounding_model, processor, device: Grounding DINO model
+        yoloe_model, device: YOLOE-26X model
         det_threshold: ngưỡng confidence cho detect
 
     Returns:
@@ -299,12 +165,12 @@ def generate_bbox_image(
     w, h = image.size
 
     # Detect O1
-    box_o1, conf_o1 = _detect_single(image, o1_text, grounding_model, processor, device, det_threshold)
+    box_o1, conf_o1 = _detect_single(image, o1_text, yoloe_model, device, det_threshold, imgsz)
 
     # Detect O2 (chỉ nếu không phải viewer)
     box_o2, conf_o2 = None, 0.0
     if not is_viewer:
-        box_o2, conf_o2 = _detect_single(image, o2_text, grounding_model, processor, device, det_threshold)
+        box_o2, conf_o2 = _detect_single(image, o2_text, yoloe_model, device, det_threshold, imgsz)
 
     # Determine marks_ok
     o1_ok = box_o1 is not None and conf_o1 >= det_threshold
