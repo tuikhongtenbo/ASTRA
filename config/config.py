@@ -10,8 +10,18 @@ import os
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-# Local data (copied from CODA)
-DATA_DIR = os.path.join(BASE_DIR, "data")
+def _first_existing_path(*paths: str) -> str:
+    for path in paths:
+        if os.path.exists(path):
+            return path
+    return paths[0]
+
+
+# Local data can live either in ASTRA/data or ASTRA/dataset/data depending on the clone.
+DATA_DIR = _first_existing_path(
+    os.path.join(BASE_DIR, "dataset", "data"),
+    os.path.join(BASE_DIR, "data"),
+)
 JSON_DIR = os.path.join(DATA_DIR, "json")
 TRAIN_FILE = os.path.join(DATA_DIR, "train.jsonl")
 DEV_FILE = os.path.join(DATA_DIR, "dev.jsonl")
@@ -23,17 +33,15 @@ OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
 # Thử nhiều candidate paths, ưu tiên local
 _CANDIDATE_IMAGE_PATHS = [
     os.path.join(BASE_DIR, "..", "thamkhao", "SpatialMQA", "Dataset", "relevant_images"),
+    os.path.join(BASE_DIR, "dataset", "images", "relevant_images"),
+    os.path.join(BASE_DIR, "dataset", "images", "test_images"),
+    os.path.join(BASE_DIR, "dataset", "images", "COCO2017"),
     os.path.join(BASE_DIR, "data", "images", "relevant_images"),
     os.path.join(BASE_DIR, "data", "images", "test_images"),
     os.path.join(BASE_DIR, "data", "images"),
     os.path.join(BASE_DIR, "relevant_images"),
 ]
-for _p in _CANDIDATE_IMAGE_PATHS:
-    if os.path.exists(_p):
-        IMAGE_DIR = _p
-        break
-else:
-    IMAGE_DIR = _CANDIDATE_IMAGE_PATHS[0]
+IMAGE_DIR = _first_existing_path(*_CANDIDATE_IMAGE_PATHS)
 
 # ======== MODELS ========
 MODEL_NAME_2B = "Qwen/Qwen3-VL-2B-Instruct"
