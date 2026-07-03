@@ -1,6 +1,6 @@
-"""
+﻿"""
 step1_bbox_images.py — ASTRA v2, Module 1: Sinh bbox-marked images.
-Chạy standalone: JSON + ảnh gốc → output/m1_bbox/
+Chạy standalone: test_objects_last.json + ảnh gốc -> output/m1_bbox/
 
 Usage:
   python scripts/step1_bbox_images.py
@@ -18,8 +18,6 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from PIL import Image
-
 from config.pipeline_config import (
     EXTRACTION_FILE, IMAGE_DIR, M1_OUTPUT_DIR, M1_BBOX_INFO_FILE,
     DET_CONF_THRESHOLD,
@@ -27,17 +25,7 @@ from config.pipeline_config import (
 from models.image_generator import (
     generate_bbox_image, should_run_yoloe, load_yoloe_model,
 )
-
-
-def find_image_path(image_name: str) -> str | None:
-    candidates = [
-        os.path.join(IMAGE_DIR, image_name),
-        os.path.join(IMAGE_DIR, image_name.replace(".jpg", ".png")),
-    ]
-    for p in candidates:
-        if os.path.exists(p):
-            return p
-    return None
+from utils.utils import find_image_path, load_image
 
 
 def main():
@@ -52,7 +40,7 @@ def main():
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Load extraction
+    # Load pre-extracted O1/O2 records from test_objects_last.json
     with open(args.extraction, "r", encoding="utf-8") as f:
         records = json.load(f)
 
@@ -82,13 +70,10 @@ def main():
         if not should_run_yoloe(record):
             skip_count += 1
             # Vẫn lưu ảnh gốc vào output để giữ đồng bộ id
-            img_path = find_image_path(img_name)
-            if img_path:
-                try:
-                    img = Image.open(img_path).convert("RGB")
-                    img.save(os.path.join(args.output_dir, f"{sid}_bbox.jpg"), quality=95)
-                except Exception:
-                    pass
+            img_path = find_image_path(args.image_dir, img_name)
+            img = load_image(img_path) if img_path else None
+            if img is not None:
+                img.save(os.path.join(args.output_dir, f"{sid}_bbox.jpg"), quality=95)
             bbox_info[sid] = {
                 "marks_ok": False,
                 "box_o1": None,
@@ -104,13 +89,17 @@ def main():
             continue
 
         # Load image
-        img_path = find_image_path(img_name)
+        img_path = find_image_path(args.image_dir, img_name)
         if not img_path:
             print(f"[{i+1}/{len(records)}] id={sid} ERROR: image not found: {img_name}")
             bbox_info[sid] = {"marks_ok": False, "skip_reason": "image_not_found"}
             continue
 
-        img = Image.open(img_path).convert("RGB")
+        img = load_image(img_path)
+        if img is None:
+            print(f"[{i+1}/{len(records)}] id={sid} ERROR: image open failed: {img_name}")
+            bbox_info[sid] = {"marks_ok": False, "skip_reason": "image_open_failed"}
+            continue
 
         # Run M1
         marked_img, box_info = generate_bbox_image(
@@ -136,13 +125,14 @@ def main():
             print(f"[{i+1}/{len(records)}] id={sid} FAIL")
 
     # Save bbox_info.json
-    with open(M1_BBOX_INFO_FILE, "w", encoding="utf-8") as f:
+    bbox_info_path = os.path.join(args.output_dir, "bbox_info.json")
+    with open(bbox_info_path, "w", encoding="utf-8") as f:
         json.dump(bbox_info, f, ensure_ascii=False, indent=2)
 
     print(f"\n[M1] Done: {ok_count} OK, {fail_count} FAIL, {skip_count} SKIP "
           f"(confidence gating) | Total: {len(records)}")
-    print(f"[M1] Images → {args.output_dir}/")
-    print(f"[M1] Info   → {M1_BBOX_INFO_FILE}")
+    print(f"[M1] Images -> {args.output_dir}/")
+    print(f"[M1] Info   -> {bbox_info_path}")
 
 
 if __name__ == "__main__":

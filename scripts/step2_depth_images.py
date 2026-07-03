@@ -1,6 +1,6 @@
-"""
+﻿"""
 step2_depth_images.py — ASTRA v2, Module 2: Sinh depth heatmap images.
-Chạy standalone: bbox images + bbox_info.json → output/m2_depth/
+Chạy standalone: bbox images + bbox_info.json -> output/m2_depth/
 
 Usage:
   python scripts/step2_depth_images.py
@@ -17,16 +17,15 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from PIL import Image
-
 from config.pipeline_config import (
-    IMAGE_DIR, M1_OUTPUT_DIR, M1_BBOX_INFO_FILE, M2_OUTPUT_DIR, M2_DEPTH_INFO_FILE,
+    EXTRACTION_FILE, IMAGE_DIR, M1_OUTPUT_DIR, M1_BBOX_INFO_FILE, M2_OUTPUT_DIR, M2_DEPTH_INFO_FILE,
     DEPTH_MODEL_SIZE, DEPTH_COLORMAP,
 )
 from models.image_generator import (
     compute_depth_cue, render_depth_image,
     load_depth_model, should_run_yoloe,
 )
+from utils.utils import find_image_path, load_image
 
 
 def main():
@@ -45,7 +44,6 @@ def main():
         bbox_info = json.load(f)
 
     # Load extraction để lấy record gốc (cho should_run_yoloe)
-    from config.pipeline_config import EXTRACTION_FILE
     with open(EXTRACTION_FILE, "r", encoding="utf-8") as f:
         extraction_records = {str(r["id"]): r for r in json.load(f)}
 
@@ -94,23 +92,29 @@ def main():
                 "relation_text": None,
                 "skip_reason": "marks_failed",
             }
-            # Vẫn tạo placeholder image (ảnh gốc ko có depth)
-            bbox_img_path = os.path.join(args.image_dir, record.get("image", ""))
-            img = Image.open(bbox_img_path).convert("RGB")
-            out_path = os.path.join(args.output_dir, f"{sid}_depth.jpg")
-            img.save(out_path, quality=85)
+            # Vẫn tạo placeholder image (ảnh gốc không có depth)
+            img_name = record.get("image", "")
+            img_path = find_image_path(args.image_dir, img_name)
+            img = load_image(img_path) if img_path else None
+            if img is not None:
+                out_path = os.path.join(args.output_dir, f"{sid}_depth.jpg")
+                img.save(out_path, quality=85)
             print(f"[{i+1}/{len(bbox_items)}] id={sid} SKIP (marks_failed)")
             continue
 
         # Load ảnh gốc để tính depth
         img_name = record.get("image", "")
-        img_path = os.path.join(args.image_dir, img_name)
-        if not os.path.exists(img_path):
+        img_path = find_image_path(args.image_dir, img_name)
+        if not img_path:
             print(f"[{i+1}/{len(bbox_items)}] id={sid} ERROR: image not found: {img_name}")
             depth_info[sid] = {"depth_ok": False, "skip_reason": "image_not_found"}
             continue
 
-        img = Image.open(img_path).convert("RGB")
+        img = load_image(img_path)
+        if img is None:
+            print(f"[{i+1}/{len(bbox_items)}] id={sid} ERROR: image open failed: {img_name}")
+            depth_info[sid] = {"depth_ok": False, "skip_reason": "image_open_failed"}
+            continue
 
         # Compute depth
         depth_map, depth_o1, depth_o2 = compute_depth_cue(
@@ -155,12 +159,13 @@ def main():
               f"[2]={depth_o2:.3f} (viewer={is_viewer})")
 
     # Save depth_info.json
-    with open(M2_DEPTH_INFO_FILE, "w", encoding="utf-8") as f:
+    depth_info_path = os.path.join(args.output_dir, "depth_info.json")
+    with open(depth_info_path, "w", encoding="utf-8") as f:
         json.dump(depth_info, f, ensure_ascii=False, indent=2)
 
     print(f"\n[M2] Done: {ok_count} OK, {skip_count} SKIP | Total: {len(bbox_items)}")
-    print(f"[M2] Images → {args.output_dir}/")
-    print(f"[M2] Info   → {M2_DEPTH_INFO_FILE}")
+    print(f"[M2] Images -> {args.output_dir}/")
+    print(f"[M2] Info   -> {depth_info_path}")
 
 
 if __name__ == "__main__":
