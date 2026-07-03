@@ -87,7 +87,7 @@ def _parse_modules_arg(raw: str | None) -> list[int] | None:
     return [int(part.strip()) for part in raw.split(",") if part.strip()]
 
 def cmd_eval(args):
-    """Ch?y dánh giá: baseline, full ASTRA, ho?c escalation."""
+    """Ch?y dnh gi: baseline, full ASTRA, ho?c escalation."""
     modules = _parse_modules_arg(args.modules)
     if modules is None and args.baseline:
         modules = []
@@ -246,7 +246,7 @@ Examples:
     sp.add_argument("--baseline", action="store_true",
                     help="Cháº¡y model gá»‘c khÃ´ng báº­t module nÃ o")
     sp.add_argument("--modules", default=None,
-                    help="Override modules (ví d?: '1' ho?c '1,2,3'). N?u d? tr?ng thì dùng full [1,2,3] ho?c baseline khi có --baseline")
+                    help="Override modules (vï¿½ d?: '1' ho?c '1,2,3'). N?u d? tr?ng thï¿½ dï¿½ng full [1,2,3] ho?c baseline khi cï¿½ --baseline")
     sp.add_argument("--split", default="test")
     sp.add_argument("--output", required=True)
     sp.add_argument("--max-samples", type=int, default=None)
