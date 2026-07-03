@@ -77,14 +77,26 @@ def infer_split(pipeline: ASTRAPipeline, samples: list, output_file: str, desc: 
     return results
 
 
+def _parse_modules_arg(raw: str | None) -> list[int] | None:
+    """Parse a comma-separated module list like '1' or '1,2,3'."""
+    if raw is None:
+        return None
+    raw = raw.strip()
+    if not raw:
+        return None
+    return [int(part.strip()) for part in raw.split(",") if part.strip()]
+
 def cmd_eval(args):
-    """Chạy đánh giá: baseline, full ASTRA, hoặc escalation."""
-    if args.baseline:
+    """Ch?y d�nh gi�: baseline, full ASTRA, ho?c escalation."""
+    modules = _parse_modules_arg(args.modules)
+    if modules is None and args.baseline:
         modules = []
         tag = "baseline"
-    else:
+    elif modules is None:
         modules = [1, 2, 3]
         tag = "ASTRA_full"
+    else:
+        tag = "modules_" + "-".join(str(m) for m in modules)
 
     if args.escalation:
         tag = "escalation"
@@ -110,8 +122,6 @@ def cmd_eval(args):
         print_eval_report(metrics, f"{tag} {args.model}")
         save_metrics(metrics, args.output.replace("results.jsonl", "metrics.json"))
     pipeline.unload()
-
-
 def cmd_run_all(args):
     """Chạy cả baseline và full ASTRA cho tất cả model + tổng hợp so sánh."""
     models = args.models
@@ -236,7 +246,7 @@ Examples:
     sp.add_argument("--baseline", action="store_true",
                     help="Chạy model gốc không bật module nào")
     sp.add_argument("--modules", default=None,
-                    help="Override modules (mặc định: full [1,2,3] hoặc baseline nếu --baseline)")
+                    help="Override modules (v� d?: '1' ho?c '1,2,3'). N?u d? tr?ng th� d�ng full [1,2,3] ho?c baseline khi c� --baseline")
     sp.add_argument("--split", default="test")
     sp.add_argument("--output", required=True)
     sp.add_argument("--max-samples", type=int, default=None)
@@ -294,3 +304,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

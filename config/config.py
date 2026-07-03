@@ -24,6 +24,7 @@ OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
 _CANDIDATE_IMAGE_PATHS = [
     os.path.join(BASE_DIR, "..", "thamkhao", "SpatialMQA", "Dataset", "relevant_images"),
     os.path.join(BASE_DIR, "data", "images", "relevant_images"),
+    os.path.join(BASE_DIR, "data", "images", "test_images"),
     os.path.join(BASE_DIR, "data", "images"),
     os.path.join(BASE_DIR, "relevant_images"),
 ]
