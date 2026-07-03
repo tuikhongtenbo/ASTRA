@@ -80,6 +80,11 @@ def infer_split(pipeline: ASTRAPipeline, samples: list, output_file: str, desc: 
         print("[Errors] Top failures:")
         for message, count in errors.most_common(3):
             print(f"  {count}x {message}")
+        details = [r.get("error_detail") for r in results if r.get("error_detail")]
+        if details:
+            print("[Errors] Examples:")
+            for detail in details[:3]:
+                print(f"  - {detail}")
     return results
 
 

@@ -93,6 +93,8 @@ def map_option_letter(letter: str, options: list) -> Optional[str]:
 def find_image_path(image_dir: str, img_name: str) -> Optional[str]:
     if not img_name:
         return None
+    if os.path.exists(img_name):
+        return os.path.abspath(img_name)
     if os.path.isabs(img_name) and os.path.exists(img_name):
         return img_name
     p = os.path.join(image_dir, img_name)
@@ -100,6 +102,7 @@ def find_image_path(image_dir: str, img_name: str) -> Optional[str]:
         return p
     parent = os.path.dirname(image_dir)
     grandparent = os.path.dirname(parent)
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     candidates = [
         os.path.join(image_dir, "relevant_images"),
         os.path.join(image_dir, "test_images"),
@@ -114,6 +117,13 @@ def find_image_path(image_dir: str, img_name: str) -> Optional[str]:
         "dataset/images/relevant_images",
         "dataset/images/test_images",
         "dataset/images/COCO2017",
+        os.path.join(base_dir, "relevant_images"),
+        os.path.join(base_dir, "dataset", "images", "relevant_images"),
+        os.path.join(base_dir, "dataset", "images", "test_images"),
+        os.path.join(base_dir, "dataset", "images", "COCO2017"),
+        os.path.join(base_dir, "data", "images"),
+        os.path.join(base_dir, "data", "images", "test_images"),
+        os.path.join(base_dir, "data", "images", "relevant_images"),
     ]
     for c in candidates:
         p = os.path.join(c, img_name)

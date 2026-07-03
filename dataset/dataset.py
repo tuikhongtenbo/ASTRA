@@ -35,14 +35,16 @@ class SpatialMQADataset(Dataset):
                 obj = json.loads(line)
                 img_name = obj.get('image', '')
                 img_path = find_image_path(self.image_dir, img_name)
+                obj['image_name'] = img_name
+                obj['image_path'] = img_path
 
                 if img_path and not self.lazy_load:
                     try:
                         obj['image'] = Image.open(img_path).convert('RGB')
                     except Exception:
-                        obj['image'] = None
+                        obj['image'] = img_path
                 else:
-                    obj['image'] = img_path
+                    obj['image'] = img_path or img_name
 
                 data.append(obj)
         return data
@@ -55,6 +57,8 @@ class SpatialMQADataset(Dataset):
         return {
             "id": s.get('id', idx),
             "image": s.get('image'),
+            "image_name": s.get('image_name'),
+            "image_path": s.get('image_path'),
             "question": s['question'],
             "options": s['options'],
             "answer": s['answer'],

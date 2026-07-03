@@ -20,7 +20,7 @@ from . import module1_ogm as ogm
 from . import module2_dlc as dlc
 from . import module3_odv as odv
 from . import prompt as prompts
-from utils.utils import get_device, normalize_relation
+from utils.utils import find_image_path, get_device, normalize_relation
 
 
 class ASTRAPipeline:
@@ -156,6 +156,34 @@ class ASTRAPipeline:
             print(f"[Pipeline] Warning: Depth-Anything not loaded: {e}")
             print("[Pipeline] Module 2 (DLC) will be skipped.")
             self.depth_model = None
+
+    def _load_sample_image(self, sample: dict) -> tuple[Optional[Image.Image], Optional[str], Optional[str]]:
+        image = sample.get("image")
+        if isinstance(image, Image.Image):
+            return image.convert("RGB"), sample.get("image_path"), None
+
+        refs = []
+        for key in ("image", "image_path", "image_name"):
+            ref = sample.get(key)
+            if isinstance(ref, str) and ref and ref not in refs:
+                refs.append(ref)
+
+        if not refs:
+            return None, None, f"Failed to load image: no image reference in sample (IMAGE_DIR={self.image_dir})"
+
+        errors = []
+        for ref in refs:
+            path = find_image_path(self.image_dir, ref)
+            if not path:
+                errors.append(f"{ref} -> not found")
+                continue
+            try:
+                return Image.open(path).convert("RGB"), path, None
+            except Exception as exc:
+                errors.append(f"{path} -> {type(exc).__name__}: {exc}")
+
+        detail = "; ".join(errors[:4])
+        return None, None, f"Failed to load image: {detail} (IMAGE_DIR={self.image_dir})"
 
     def preprocess(self, image: Image.Image, question: str, options: list) -> dict:
         result = {
@@ -309,15 +337,12 @@ class ASTRAPipeline:
         from collections import Counter
         t0 = time.time()
 
-        image = sample.get("image")
-        if isinstance(image, str):
-            try:
-                image = Image.open(image).convert("RGB")
-            except Exception:
-                image = None
+        image, image_path, image_error = self._load_sample_image(sample)
         if image is None:
-            return {"id": sample.get("id", 0), "predicted": "", "correct": False,
-                    "error": "Failed to load image", "t_total": time.time() - t0, **sample}
+            return {**sample, "id": sample.get("id", 0), "predicted": "", "correct": False,
+                    "error": "Failed to load image", "error_detail": image_error,
+                    "image_path": image_path or sample.get("image_path"),
+                    "t_total": time.time() - t0}
 
         question = sample.get("question", "")
         options = sample.get("options", [])
@@ -451,6 +476,7 @@ class ASTRAPipeline:
 
         return {
             "id": sample.get("id", 0),
+            "image_path": image_path or sample.get("image_path"),
             "question": question, "options": options, "answer": answer,
             "predicted": pred, "correct": correct,
             "O1_name": O1_name if "O1_name" in dir() else None,
@@ -466,15 +492,12 @@ class ASTRAPipeline:
         if self.use_escalation:
             return self.run_escalated(sample)
 
-        image = sample.get("image")
-        if isinstance(image, str):
-            try:
-                image = Image.open(image).convert("RGB")
-            except Exception:
-                image = None
+        image, image_path, image_error = self._load_sample_image(sample)
         if image is None:
-            return {"id": sample.get("id", 0), "predicted": "", "correct": False,
-                    "error": "Failed to load image", "t_total": time.time() - t0, **sample}
+            return {**sample, "id": sample.get("id", 0), "predicted": "", "correct": False,
+                    "error": "Failed to load image", "error_detail": image_error,
+                    "image_path": image_path or sample.get("image_path"),
+                    "t_total": time.time() - t0}
 
         question = sample.get("question", "")
         options = sample.get("options", [])
@@ -494,6 +517,7 @@ class ASTRAPipeline:
 
         return {
             "id": sample.get("id", 0),
+            "image_path": image_path or sample.get("image_path"),
             "question": question, "options": options, "answer": answer,
             "predicted": predicted, "correct": correct,
             "O1_name": preprocessed.get("O1_name"),
