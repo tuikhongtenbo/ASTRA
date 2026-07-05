@@ -29,12 +29,14 @@ from PIL import Image
 from tqdm import tqdm
 
 from config.pipeline_config import (
-    EXTRACTION_FILE, V2_BBOX_IMAGE_DIR, V2_DEPTH_BBOX_IMAGE_DIR,
+    DATA_DIR, EXTRACTION_FILE, V2_BBOX_IMAGE_DIR, V2_DEPTH_BBOX_IMAGE_DIR,
     VLM_OUTPUT_DIR, VLM_RESULTS_FILE, N_PERMS, MAX_NEW_TOKENS,
 )
-from models.prompt_v2 import build_prompt
+from models.prompt_v2 import build_prompt, format_options
 from utils.utils import normalize_relation
 
+ZERO_SHOT_FILE = os.path.join(DATA_DIR, "test.jsonl")
+ZERO_SHOT_IMAGE_DIR = os.path.join(DATA_DIR, "test_images")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -52,6 +54,22 @@ def load_all_data():
     """Load extraction records keyed by sample id."""
     with open(EXTRACTION_FILE, "r", encoding="utf-8") as f:
         return {str(r["id"]): r for r in json.load(f)}
+
+
+
+def load_jsonl_data(path: str):
+    """Load JSONL records keyed by sample id."""
+    records = {}
+    with open(path, "r", encoding="utf-8") as f:
+        for line_no, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            record = json.loads(line)
+            if "id" not in record:
+                raise ValueError(f"Record at {path}:{line_no} is missing the 'id' field")
+            records[str(record["id"])] = record
+    return records
 
 
 def get_v2_image_paths(record: dict) -> tuple[str, str]:
@@ -73,6 +91,39 @@ def get_v2_image_paths(record: dict) -> tuple[str, str]:
         )
 
     return img1_path, img2_path
+
+
+
+def get_zero_shot_image_path(record: dict) -> str:
+    """Return the raw test image path for a zero-shot record."""
+    image_name = record.get("image")
+    if not image_name:
+        raise ValueError(f"Record {record.get('id')} is missing the 'image' field")
+
+    image_name = os.path.basename(image_name)
+    image_path = os.path.join(ZERO_SHOT_IMAGE_DIR, image_name)
+    if not os.path.exists(image_path):
+        raise FileNotFoundError(
+            f"Missing zero-shot image for record {record.get('id')} ({image_name}): "
+            f"{image_path}. Expected images under {ZERO_SHOT_IMAGE_DIR}"
+        )
+    return image_path
+
+
+def build_zero_shot_prompt(record: dict, options: list[str] | None = None) -> str:
+    """Build a one-image zero-shot prompt from question/options."""
+    if options is None:
+        options = record.get("options", [])
+
+    return (
+        "You are given one image.\n"
+        "Answer the spatial reasoning question using only the visual content.\n\n"
+        f"Question: {record.get('question', '')}\n\n"
+        "Options:\n"
+        f"{format_options(options)}\n\n"
+        "Think briefly, then answer in exactly this format:\n"
+        "Answer: (X)"
+    )
 
 
 def generate_permutations(options, n):
@@ -324,6 +375,56 @@ def prepare_requests(records: dict, sids: list[str]) -> list[dict]:
                 "depth_o1": 0.0,
                 "depth_o2": 0.0,
                 "relation_text": "",
+                "mode": "astra",
+            })
+
+    return requests, request_meta
+
+
+
+def prepare_zero_shot_requests(records: dict, sids: list[str]) -> tuple[list[dict], list[dict]]:
+    """
+    Prepare one-image zero-shot requests.
+    Each sample x N_PERMS becomes one request for ODV voting.
+    """
+    requests = []
+    request_meta = []
+
+    for sid in sids:
+        record = records.get(sid, {})
+        options = record.get("options", [])
+
+        img_path = get_zero_shot_image_path(record)
+        img = Image.open(img_path).convert("RGB")
+        img_url = image_to_base64(img, "JPEG")
+
+        perms = generate_permutations(options, N_PERMS)
+
+        for perm_idx, perm_opts in enumerate(perms):
+            p = build_zero_shot_prompt(record, options=perm_opts)
+
+            requests.append({
+                "image1_url": img_url,
+                "image2_url": None,
+                "image1": img,
+                "image2": None,
+                "prompt": p,
+            })
+
+            request_meta.append({
+                "sid": sid,
+                "image": record.get("image", ""),
+                "perm_idx": perm_idx,
+                "perm_opts": perm_opts,
+                "original_opts": options,
+                "answer": record.get("answer", ""),
+                "question": record.get("question", ""),
+                "marks_ok": False,
+                "depth_ok": False,
+                "depth_o1": 0.0,
+                "depth_o2": 0.0,
+                "relation_text": "",
+                "mode": "zero-shot",
             })
 
     return requests, request_meta
@@ -374,6 +475,7 @@ def reconstruct_results(request_meta: list, outputs: list[str]) -> list[dict]:
             "depth_o1": m["depth_o1"],
             "depth_o2": m["depth_o2"],
             "relation_text": m["relation_text"],
+            "mode": m.get("mode", "astra"),
             "votes": votes,
             "vote_outputs": vote_outputs,
         })
@@ -389,6 +491,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="ASTRA v2 Step 3: vLLM batch inference với ODV voting"
     )
+    parser.add_argument("--mode", choices=["astra", "zero-shot"], default="astra",
+                        help="Inference mode: astra = two annotated images, zero-shot = raw test image")
     parser.add_argument("--model", default="Qwen3-VL-4B",
                         help="Model name hoặc path (Qwen3-VL-4B, Qwen3-VL-2B, ...)")
     parser.add_argument("--device", default="cuda")
@@ -408,11 +512,17 @@ def main():
     output_file = os.path.join(args.output_dir, "results.jsonl")
 
     # Load data
-    records = load_all_data()
+    if args.mode == "zero-shot":
+        records = load_jsonl_data(ZERO_SHOT_FILE)
+        print(f"[vLLM] Mode: zero-shot | data: {ZERO_SHOT_FILE}")
+        print(f"[vLLM] Zero-shot image dir: {ZERO_SHOT_IMAGE_DIR}")
+    else:
+        records = load_all_data()
+        print(f"[vLLM] Mode: astra | data: {EXTRACTION_FILE}")
+
     sids = list(records.keys())
     if args.max_samples > 0:
         sids = sids[:args.max_samples]
-
     # Resume: đọc kết quả cũ, xác định sids đã chạy
     done_sids = set()
     if args.resume and os.path.exists(output_file):
@@ -427,9 +537,8 @@ def main():
         print("[vLLM] All samples already processed.")
         return
 
-    print(f"[vLLM] Processing {len(sids)} samples × {N_PERMS} perms = "
+    print(f"[vLLM] Processing {len(sids)} samples x {N_PERMS} perms = "
           f"{len(sids) * N_PERMS} total requests")
-
     # Load vLLM engine
     engine = VLMInferenceEngine(
         model_name=args.model,
@@ -441,10 +550,12 @@ def main():
 
     # Prepare batch requests
     print("[vLLM] Preparing requests...")
-    requests, request_meta = prepare_requests(records, sids)
+    if args.mode == "zero-shot":
+        requests, request_meta = prepare_zero_shot_requests(records, sids)
+    else:
+        requests, request_meta = prepare_requests(records, sids)
     total_reqs = len(requests)
     print(f"[vLLM] {total_reqs} requests prepared")
-
     # Batch inference
     print(f"[vLLM] Running batch inference (batch_size={args.batch_size})...")
     all_outputs = []
@@ -505,13 +616,18 @@ def main():
     acc_depth = depth_ok_correct / depth_ok_count if depth_ok_count > 0 else 0
 
     elapsed = time.time() - t_start
+    req_rate = total_reqs / elapsed if elapsed > 0 else 0.0
     print(f"\n[vLLM] ========== RESULTS ==========")
+    print(f"[vLLM] Mode:       {args.mode}")
     print(f"[vLLM] Total:      {correct_count}/{total} correct ({acc:.1%})")
-    print(f"[vLLM] marks_ok:  {marks_ok_correct}/{marks_ok_count} ({acc_marks:.1%})")
-    print(f"[vLLM] depth_ok:   {depth_ok_correct}/{depth_ok_count} ({acc_depth:.1%})")
-    print(f"[vLLM] Time:       {elapsed/60:.1f} min  ({total_reqs/elapsed:.1f} req/s)")
+    if args.mode == "astra":
+        print(f"[vLLM] marks_ok:  {marks_ok_correct}/{marks_ok_count} ({acc_marks:.1%})")
+        print(f"[vLLM] depth_ok:   {depth_ok_correct}/{depth_ok_count} ({acc_depth:.1%})")
+    else:
+        print("[vLLM] marks_ok:   n/a for zero-shot")
+        print("[vLLM] depth_ok:   n/a for zero-shot")
+    print(f"[vLLM] Time:       {elapsed/60:.1f} min  ({req_rate:.1f} req/s)")
     print(f"[vLLM] Output:     {output_file}")
-
 
 if __name__ == "__main__":
     main()
