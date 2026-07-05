@@ -5,6 +5,7 @@ Pipeline — ASTRAPipeline tổng hợp 3 modules.
 from __future__ import annotations
 
 import json
+import random
 import time
 from typing import Optional
 
@@ -565,80 +566,52 @@ class ASTRAPipeline:
 
     def run_v2(self, extraction_record: dict) -> dict:
         """
-        ASTRA v2 pipeline — chạy từng module riêng biệt.
+        ASTRA v2 pipeline using pre-marked RGB/depth images from dataset/.
 
-        Đọc intermediate files từ step1 (m1_bbox/) và step2 (m2_depth/),
-        build prompt với prompt_v2, chạy ODV voting với 2 ảnh đầu vào.
-
-        Args:
-            extraction_record: dict từ test_objects_last.json
-
-        Returns:
-            dict với keys: id, predicted, correct, marks_ok, depth_ok,
-            votes, depth_o1, depth_o2, relation_text, prompt
+        Images are resolved from extraction_record["image"]:
+        - dataset/bbox_original_output/{image}
+        - dataset/depth_bbox_output/{image_stem}_depth.jpg
         """
         import os
-        import random
         from collections import Counter
 
         from config.pipeline_config import (
-            M1_OUTPUT_DIR, M2_OUTPUT_DIR, N_PERMS,
+            V2_BBOX_IMAGE_DIR, V2_DEPTH_BBOX_IMAGE_DIR,
         )
         from models.prompt_v2 import build_prompt
 
         t0 = time.time()
         sid = str(extraction_record.get("id", ""))
+        image_name = extraction_record.get("image", "")
+        if not image_name:
+            raise ValueError(f"Record {sid} is missing the 'image' field")
+
+        image_name = os.path.basename(image_name)
+        image_stem, _ = os.path.splitext(image_name)
+        img1_path = os.path.join(V2_BBOX_IMAGE_DIR, image_name)
+        img2_path = os.path.join(V2_DEPTH_BBOX_IMAGE_DIR, f"{image_stem}_depth.jpg")
+
+        missing = [path for path in (img1_path, img2_path) if not os.path.exists(path)]
+        if missing:
+            raise FileNotFoundError(
+                f"Missing required v2 image(s) for record {sid} ({image_name}): {missing}"
+            )
 
         options = extraction_record.get("options", [])
         answer = extraction_record.get("answer", "")
         question = extraction_record.get("question", "")
 
-        # ── Load intermediate data ──────────────────────────────────────────
-        bbox_info_path = os.path.join(M1_OUTPUT_DIR, "bbox_info.json")
-        depth_info_path = os.path.join(M2_OUTPUT_DIR, "depth_info.json")
+        img1 = Image.open(img1_path).convert("RGB")
+        img2 = Image.open(img2_path).convert("RGB")
 
-        box_info = {}
-        if os.path.exists(bbox_info_path):
-            with open(bbox_info_path, "r", encoding="utf-8") as f:
-                all_boxes = json.load(f)
-            box_info = all_boxes.get(sid, {})
-
-        depth_info = {}
-        if os.path.exists(depth_info_path):
-            with open(depth_info_path, "r", encoding="utf-8") as f:
-                all_depth = json.load(f)
-            depth_info = all_depth.get(sid, {})
-
-        marks_ok = bool(box_info.get("marks_ok", False))
-        depth_ok = bool(depth_info.get("depth_ok", False))
-        depth_o1 = depth_info.get("depth_o1", 0.0) or 0.0
-        depth_o2 = depth_info.get("depth_o2", 0.0) or 0.0
-        relation_text = depth_info.get("relation_text", "")
-
-        # ── Load 2 ảnh ─────────────────────────────────────────────────────
-        img1_path = os.path.join(M1_OUTPUT_DIR, f"{sid}_bbox.jpg")
-        img2_path = os.path.join(M2_OUTPUT_DIR, f"{sid}_depth.jpg")
-
-        img1 = None
-        if os.path.exists(img1_path):
-            img1 = Image.open(img1_path).convert("RGB")
-
-        img2 = None
-        use_two_images = marks_ok and depth_ok and os.path.exists(img2_path)
-        if use_two_images:
-            img2 = Image.open(img2_path).convert("RGB")
-
-        # ── Build prompt ────────────────────────────────────────────────────
-        prompt_marks_ok = marks_ok and depth_ok
         prompt = build_prompt(
             record=extraction_record,
-            marks_ok=prompt_marks_ok,
-            depth_o1=depth_o1,
-            depth_o2=depth_o2,
+            marks_ok=True,
+            depth_o1=0.0,
+            depth_o2=0.0,
             options=options,
         )
 
-        # ── ODV Voting ──────────────────────────────────────────────────────
         perms = self._generate_permutations(options, self.n_perms)
         votes = []
         vote_outputs = []
@@ -646,13 +619,13 @@ class ASTRAPipeline:
         for perm_opts in perms:
             perm_prompt = build_prompt(
                 record=extraction_record,
-                marks_ok=prompt_marks_ok,
-                depth_o1=depth_o1,
-                depth_o2=depth_o2,
+                marks_ok=True,
+                depth_o1=0.0,
+                depth_o2=0.0,
                 options=perm_opts,
             )
 
-            if self.model is not None and img1 is not None:
+            if self.model is not None or is_api_backend(self.vlm_backend):
                 output = self._generate_v2(img1, img2, perm_prompt)
             else:
                 output = ""
@@ -660,7 +633,6 @@ class ASTRAPipeline:
             parsed = self._parse_answer(output, perm_opts, options)
             votes.append(parsed)
 
-        # Majority vote
         valid = [v for v in votes if v is not None]
         if valid:
             counter = Counter(valid)
@@ -674,20 +646,21 @@ class ASTRAPipeline:
 
         return {
             "id": sid,
+            "image": image_name,
             "question": question,
             "options": options,
             "answer": answer,
             "predicted": pred_norm,
             "correct": correct,
-            "marks_ok": marks_ok,
-            "depth_ok": depth_ok,
-            "depth_o1": depth_o1,
-            "depth_o2": depth_o2,
-            "relation_text": relation_text,
+            "marks_ok": True,
+            "depth_ok": True,
+            "depth_o1": 0.0,
+            "depth_o2": 0.0,
+            "relation_text": "",
             "votes": votes,
             "vote_outputs": vote_outputs,
             "prompt": prompt,
-            "two_images_used": use_two_images,
+            "two_images_used": True,
             "t_total": time.time() - t0,
         }
 

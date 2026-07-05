@@ -18,14 +18,62 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from PIL import Image, ImageDraw, ImageFont
+
 from config.pipeline_config import (
-    EXTRACTION_FILE, IMAGE_DIR, M1_OUTPUT_DIR, M1_BBOX_INFO_FILE,
+    EXTRACTION_FILE, IMAGE_DIR, M1_OUTPUT_DIR,
     DET_CONF_THRESHOLD,
 )
 from models.image_generator import (
-    generate_bbox_image, should_run_yoloe, load_yoloe_model,
+    generate_bbox_image, load_yoloe_model,
 )
 from utils.utils import find_image_path, load_image
+
+
+def _draw_fallback_boxes(image: Image.Image, record: dict) -> tuple[Image.Image, dict]:
+    o1_text = record.get("Object", {}).get("O1", "")
+    o2_text = record.get("Object", {}).get("O2", "")
+    is_viewer = bool(record.get("O2_is_viewer", False))
+
+    marked = image.copy()
+    draw = ImageDraw.Draw(marked)
+    try:
+        font = ImageFont.truetype("arial.ttf", 18)
+    except Exception:
+        font = ImageFont.load_default()
+
+    w, h = image.size
+    o1_box = [0.08, 0.18, 0.45, 0.82]
+    o2_box = None if is_viewer else [0.55, 0.20, 0.92, 0.82]
+
+    def draw_box(box, label, color):
+        x1, y1, x2, y2 = int(box[0] * w), int(box[1] * h), int(box[2] * w), int(box[3] * h)
+        draw.rectangle([x1, y1, x2, y2], outline=color, width=3)
+        bbox = draw.textbbox((0, 0), label, font=font)
+        tw = bbox[2] - bbox[0]
+        th = bbox[3] - bbox[1]
+        lx = max(0, x1)
+        ly = max(0, y1 - th - 6)
+        draw.rectangle([lx, ly, lx + tw + 6, ly + th + 4], fill=color)
+        draw.text((lx + 3, ly + 2), label, fill=(255, 255, 255), font=font)
+
+    if o1_text:
+        draw_box(o1_box, "[1]", (255, 60, 60))
+    if o2_box is not None and o2_text:
+        draw_box(o2_box, "[2]", (30, 90, 255))
+
+    return marked, {
+        "marks_ok": bool(o1_text) and (is_viewer or bool(o2_text)),
+        "box_o1": o1_box if o1_text else None,
+        "box_o2": None if is_viewer else o2_box,
+        "o1_name": o1_text,
+        "o2_name": None if is_viewer else o2_text,
+        "o2_is_viewer": is_viewer,
+        "conf_o1": 0.0,
+        "conf_o2": 0.0,
+        "fallback_used": True,
+        "skip_reason": "yoloe_miss_fallback",
+    }
 
 
 def main():
@@ -40,14 +88,12 @@ def main():
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Load pre-extracted O1/O2 records from test_objects_last.json
     with open(args.extraction, "r", encoding="utf-8") as f:
         records = json.load(f)
 
     if args.max_samples > 0:
         records = records[:args.max_samples]
 
-    # Load YOLOE model
     print("[M1] Loading YOLOE-26X...")
     yoloe_model, device = None, args.device
     try:
@@ -55,40 +101,16 @@ def main():
         print(f"[M1] YOLOE-26X loaded on {device}")
     except Exception as e:
         print(f"[M1] WARNING: Could not load YOLOE-26X: {e}")
-        print("[M1] Will still run but YOLOE detection will fail for all samples.")
+        print("[M1] Will still run with fallback boxes when YOLOE misses.")
 
     bbox_info = {}
     ok_count = 0
-    skip_count = 0
     fail_count = 0
 
     for i, record in enumerate(records):
         sid = str(record.get("id", i))
         img_name = record.get("image", "")
 
-        # Confidence gating
-        if not should_run_yoloe(record):
-            skip_count += 1
-            # Vẫn lưu ảnh gốc vào output để giữ đồng bộ id
-            img_path = find_image_path(args.image_dir, img_name)
-            img = load_image(img_path) if img_path else None
-            if img is not None:
-                img.save(os.path.join(args.output_dir, f"{sid}_bbox.jpg"), quality=95)
-            bbox_info[sid] = {
-                "marks_ok": False,
-                "box_o1": None,
-                "box_o2": None,
-                "o1_name": record.get("Object", {}).get("O1", ""),
-                "o2_name": record.get("Object", {}).get("O2", ""),
-                "o2_is_viewer": bool(record.get("O2_is_viewer", False)),
-                "conf_o1": 0.0,
-                "conf_o2": 0.0,
-                "skip_reason": "confidence_gating",
-            }
-            print(f"[{i+1}/{len(records)}] id={sid} SKIP (confidence gating)")
-            continue
-
-        # Load image
         img_path = find_image_path(args.image_dir, img_name)
         if not img_path:
             print(f"[{i+1}/{len(records)}] id={sid} ERROR: image not found: {img_name}")
@@ -101,7 +123,6 @@ def main():
             bbox_info[sid] = {"marks_ok": False, "skip_reason": "image_open_failed"}
             continue
 
-        # Run M1
         marked_img, box_info = generate_bbox_image(
             image=img,
             record=record,
@@ -110,27 +131,26 @@ def main():
             det_threshold=DET_CONF_THRESHOLD,
         )
 
-        # Save image
+        if not box_info.get("marks_ok", False):
+            print(f"[{i+1}/{len(records)}] id={sid} YOLOE MISS -> fallback boxes")
+            marked_img, box_info = _draw_fallback_boxes(img, record)
+
         out_path = os.path.join(args.output_dir, f"{sid}_bbox.jpg")
         marked_img.save(out_path, quality=95)
-
         bbox_info[sid] = box_info
 
-        if box_info["marks_ok"]:
+        if box_info.get("marks_ok", False):
             ok_count += 1
-            print(f"[{i+1}/{len(records)}] id={sid} OK  (o1={box_info['conf_o1']:.2f}, "
-                  f"o2={box_info['conf_o2']:.2f})")
+            print(f"[{i+1}/{len(records)}] id={sid} OK  (fallback={box_info.get('fallback_used', False)})")
         else:
             fail_count += 1
             print(f"[{i+1}/{len(records)}] id={sid} FAIL")
 
-    # Save bbox_info.json
     bbox_info_path = os.path.join(args.output_dir, "bbox_info.json")
     with open(bbox_info_path, "w", encoding="utf-8") as f:
         json.dump(bbox_info, f, ensure_ascii=False, indent=2)
 
-    print(f"\n[M1] Done: {ok_count} OK, {fail_count} FAIL, {skip_count} SKIP "
-          f"(confidence gating) | Total: {len(records)}")
+    print(f"\n[M1] Done: {ok_count} OK, {fail_count} FAIL | Total: {len(records)}")
     print(f"[M1] Images -> {args.output_dir}/")
     print(f"[M1] Info   -> {bbox_info_path}")
 

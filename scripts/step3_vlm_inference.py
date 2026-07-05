@@ -27,7 +27,7 @@ if str(_REPO_ROOT) not in sys.path:
 from PIL import Image
 
 from config.pipeline_config import (
-    EXTRACTION_FILE, M1_OUTPUT_DIR, M2_OUTPUT_DIR,
+    EXTRACTION_FILE, V2_BBOX_IMAGE_DIR, V2_DEPTH_BBOX_IMAGE_DIR,
     VLM_OUTPUT_DIR, VLM_RESULTS_FILE, N_PERMS, MAX_NEW_TOKENS,
 )
 from models.prompt_v2 import build_prompt
@@ -47,22 +47,30 @@ def image_to_base64(img: Image.Image, fmt: str = "JPEG") -> str:
 
 
 def load_all_data():
-    """Load extraction records, bbox_info, depth_info."""
+    """Load extraction records keyed by sample id."""
     with open(EXTRACTION_FILE, "r", encoding="utf-8") as f:
-        records = {str(r["id"]): r for r in json.load(f)}
+        return {str(r["id"]): r for r in json.load(f)}
 
-    bbox_path = os.path.join(M1_OUTPUT_DIR, "bbox_info.json")
-    with open(bbox_path, "r", encoding="utf-8") as f:
-        bbox_info = json.load(f)
 
-    depth_path = os.path.join(M2_OUTPUT_DIR, "depth_info.json")
-    if os.path.exists(depth_path):
-        with open(depth_path, "r", encoding="utf-8") as f:
-            depth_info = json.load(f)
-    else:
-        depth_info = {}
+def get_v2_image_paths(record: dict) -> tuple[str, str]:
+    """Return marked RGB and marked depth image paths for a record."""
+    image_name = record.get("image")
+    if not image_name:
+        raise ValueError(f"Record {record.get('id')} is missing the 'image' field")
 
-    return records, bbox_info, depth_info
+    image_name = os.path.basename(image_name)
+    image_stem, _ = os.path.splitext(image_name)
+    img1_path = os.path.join(V2_BBOX_IMAGE_DIR, image_name)
+    img2_path = os.path.join(V2_DEPTH_BBOX_IMAGE_DIR, f"{image_stem}_depth.jpg")
+
+    missing = [path for path in (img1_path, img2_path) if not os.path.exists(path)]
+    if missing:
+        raise FileNotFoundError(
+            f"Missing required v2 image(s) for record {record.get('id')} "
+            f"({image_name}): {missing}"
+        )
+
+    return img1_path, img2_path
 
 
 def generate_permutations(options, n):
@@ -245,73 +253,54 @@ class VLMInferenceEngine:
 # Prepare batch data
 # ─────────────────────────────────────────────────────────────────────────────
 
-def prepare_requests(records: dict, bbox_info: dict, depth_info: dict,
-                     sids: list[str]) -> list[dict]:
+def prepare_requests(records: dict, sids: list[str]) -> list[dict]:
     """
-    Chuẩn bị tất cả inference requests cho batch processing.
-    Mỗi sample × N_PERMS = 1 request.
+    Prepare all inference requests for batch processing.
+    Each sample x N_PERMS becomes one request.
     """
     requests = []
-    request_meta = []  # track metadata để reconstruct results
+    request_meta = []
 
     for sid in sids:
         record = records.get(sid, {})
-        box = bbox_info.get(sid, {})
-        depth = depth_info.get(sid, {})
-
         options = record.get("options", [])
-        marks_ok = bool(box.get("marks_ok", False))
-        depth_ok = bool(depth.get("depth_ok", False))
-        depth_o1 = depth.get("depth_o1", 0.0) or 0.0
-        depth_o2 = depth.get("depth_o2", 0.0) or 0.0
 
-        # Load 2 ảnh → base64
-        img1_url = None
-        img1_path = os.path.join(M1_OUTPUT_DIR, f"{sid}_bbox.jpg")
-        if os.path.exists(img1_path):
-            img1 = Image.open(img1_path).convert("RGB")
-            img1_url = image_to_base64(img1, "JPEG")
+        img1_path, img2_path = get_v2_image_paths(record)
+        img1 = Image.open(img1_path).convert("RGB")
+        img2 = Image.open(img2_path).convert("RGB")
+        img1_url = image_to_base64(img1, "JPEG")
+        img2_url = image_to_base64(img2, "JPEG")
 
-        img2_url = None
-        img2_path = os.path.join(M2_OUTPUT_DIR, f"{sid}_depth.jpg")
-        if marks_ok and depth_ok and os.path.exists(img2_path):
-            img2 = Image.open(img2_path).convert("RGB")
-            img2_url = image_to_base64(img2, "JPEG")
-
-        use_two = (img1_url is not None and img2_url is not None)
-        prompt_marks_ok = marks_ok and depth_ok
-
-        # ODV permutations
         perms = generate_permutations(options, N_PERMS)
 
         for perm_idx, perm_opts in enumerate(perms):
             p = build_prompt(
                 record=record,
-                marks_ok=prompt_marks_ok,
-                depth_o1=depth_o1,
-                depth_o2=depth_o2,
+                marks_ok=True,
+                depth_o1=0.0,
+                depth_o2=0.0,
                 options=perm_opts,
             )
 
-            req = {
+            requests.append({
                 "image1_url": img1_url,
                 "image2_url": img2_url,
                 "prompt": p,
-            }
-            requests.append(req)
+            })
 
             request_meta.append({
                 "sid": sid,
+                "image": record.get("image", ""),
                 "perm_idx": perm_idx,
                 "perm_opts": perm_opts,
                 "original_opts": options,
                 "answer": record.get("answer", ""),
                 "question": record.get("question", ""),
-                "marks_ok": marks_ok,
-                "depth_ok": depth_ok,
-                "depth_o1": depth_o1,
-                "depth_o2": depth_o2,
-                "relation_text": depth.get("relation_text", ""),
+                "marks_ok": True,
+                "depth_ok": True,
+                "depth_o1": 0.0,
+                "depth_o2": 0.0,
+                "relation_text": "",
             })
 
     return requests, request_meta
@@ -351,6 +340,7 @@ def reconstruct_results(request_meta: list, outputs: list[str]) -> list[dict]:
 
         results.append({
             "id": sid,
+            "image": m.get("image", ""),
             "question": m["question"],
             "options": m["original_opts"],
             "answer": m["answer"],
@@ -395,7 +385,7 @@ def main():
     output_file = os.path.join(args.output_dir, "results.jsonl")
 
     # Load data
-    records, bbox_info, depth_info = load_all_data()
+    records = load_all_data()
     sids = list(records.keys())
     if args.max_samples > 0:
         sids = sids[:args.max_samples]
@@ -428,7 +418,7 @@ def main():
 
     # Prepare batch requests
     print("[vLLM] Preparing requests...")
-    requests, request_meta = prepare_requests(records, bbox_info, depth_info, sids)
+    requests, request_meta = prepare_requests(records, sids)
     total_reqs = len(requests)
     print(f"[vLLM] {total_reqs} requests prepared")
 

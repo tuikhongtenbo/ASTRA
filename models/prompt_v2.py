@@ -1,6 +1,8 @@
 """
-prompt_v2.py — ASTRA v2 prompt templates.
-Thiết kế: dùng str.format() với dict đầy đủ field, default rỗng cho optional placeholders.
+prompt_v2.py - ASTRA v2 prompt templates.
+
+Builds the two-image prompt used by v2 inference. The caller provides images
+separately; this module only formats the text instruction.
 """
 
 from __future__ import annotations
@@ -23,30 +25,20 @@ def format_options(options: list[str]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Prompt templates (dùng str.format())
+# Prompt template
 # ---------------------------------------------------------------------------
 
-_PROMPT_FULL = """\
+_PROMPT = """\
 You are given 2 images of the same scene:
-- Image 1: the photo with two reference points marked — [1] = {o1_name}{opt_o2_mark}.
-- Image 2: an auxiliary depth heatmap of the same scene, where brighter/warmer colors = closer to
-  the camera and darker/cooler colors = farther. A colorbar legend (Near -> Far) is shown in the
-  bottom-right corner. This is an estimate from an external depth model and may be inaccurate —
-  cross-check it against what you directly observe in Image 1 before concluding.
+- Image 1: the original RGB photo with two detected objects marked.
+- Image 2: an auxiliary depth heatmap of the same scene with the same detected objects marked.
 
-  Estimated relative depth (lower = closer to camera): [1]≈{depth_o1:.2f}{opt_o2_depth}
-  {viewer_note}
-  Depth hint: {depth_relation}
+Objects:
+[1] = {o1_name}
+[2] = {o2_name}
 
-Question: {question}
+{relation_guidance}
 
-Options:
-{options_block}
-
-Think briefly, then answer in exactly this format:
-Answer: (X)"""
-
-_PROMPT_FALLBACK = """\
 Question: {question}
 
 Options:
@@ -64,74 +56,36 @@ def build_prompt(
     options: Optional[list[str]] = None,
 ) -> str:
     """
-    Build prompt cho VLM dựa trên trạng thái pipeline.
+    Build the ASTRA v2 prompt for a record.
 
-    Case đầy đủ (marks_ok=True):
-      - 2 ảnh đầu vào: Image1=bbox-marked, Image2=depth-heatmap
-      - Prompt đầy đủ với depth numbers + depth_relation_text
-
-    Case fallback (marks_ok=False):
-      - Chỉ question + options, không mô tả ảnh, không depth cue
-
-    Args:
-        record: dict từ test_objects_last.json
-        marks_ok: True nếu M1 detect thành công
-        depth_o1, depth_o2: giá trị depth đã tính (chỉ dùng khi marks_ok=True)
-        options: list options (lấy từ record nếu None)
+    The marks/depth arguments are kept for compatibility with existing callers,
+    but v2 now always uses the same two-image prompt without fallback text or
+    numeric depth hints.
     """
+    del marks_ok, depth_o1, depth_o2
+
     if options is None:
         options = record.get("options", [])
 
-    o1_name = record.get("Object", {}).get("O1", "")
-    o2_name = record.get("Object", {}).get("O2", "")
-    is_viewer = bool(record.get("O2_is_viewer", False))
-
-    options_block = format_options(options)
-    question = record.get("question", "")
-
-    if not marks_ok:
-        return _PROMPT_FALLBACK.format(
-            question=question,
-            options_block=options_block,
-        )
-
-    # ── Case đầy đủ ───────────────────────────────────────────────────────
-    # opt_o2_mark: mô tả [2] trong Image 1
-    if is_viewer:
-        opt_o2_mark = ""
-        depth_o2_display = 0.0  # viewer depth = 0.0
-    else:
-        opt_o2_mark = f', [2] = {o2_name}'
-        depth_o2_display = depth_o2
-
-    # opt_o2_depth: giá trị số [2] trong text
-    if is_viewer:
-        opt_o2_depth = ""
-        viewer_note = (
-            f"Note: {o2_name} refers to your own viewpoint (the camera position), which is "
-            f"not a physical object and is therefore not marked in the images. "
-            f"Its reference depth is defined as 0 (the camera plane)."
+    objects = record.get("Object", {})
+    o1_name = objects.get("O1", "")
+    o2_name = objects.get("O2", "")
+    if record.get("O2_is_viewer", False):
+        relation_guidance = (
+            "Perspective:\n"
+            f"[2] represents the current position/viewpoint of {o2_name}. "
+            "Answer where [1] is located relative to [2] from that viewpoint."
         )
     else:
-        opt_o2_depth = f", [2]≈{depth_o2:.2f}"
-        viewer_note = ""
+        relation_guidance = (
+            "Spatial relation:\n"
+            "Answer where [1] is located relative to [2]."
+        )
 
-    # depth_relation_text
-    from config.pipeline_config import DEPTH_DIFF_THRESHOLD
-    from models.image_generator import depth_relation_text as _drt
-    if is_viewer:
-        effective_o2_name = o2_name
-    else:
-        effective_o2_name = o2_name
-    depth_relation = _drt(depth_o1, depth_o2_display, o1_name, effective_o2_name, DEPTH_DIFF_THRESHOLD)
-
-    return _PROMPT_FULL.format(
+    return _PROMPT.format(
         o1_name=o1_name,
-        opt_o2_mark=opt_o2_mark,
-        opt_o2_depth=opt_o2_depth,
-        viewer_note=viewer_note,
-        depth_o1=depth_o1,
-        depth_relation=depth_relation,
-        question=question,
-        options_block=options_block,
+        o2_name=o2_name,
+        relation_guidance=relation_guidance,
+        question=record.get("question", ""),
+        options_block=format_options(options),
     )

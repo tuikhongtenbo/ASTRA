@@ -11,6 +11,8 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 DATA_DIR = os.path.join(BASE_DIR, "dataset", "data")
+V2_BBOX_IMAGE_DIR = os.path.join(BASE_DIR, "dataset", "bbox_original_output")
+V2_DEPTH_BBOX_IMAGE_DIR = os.path.join(BASE_DIR, "dataset", "depth_bbox_output")
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 DEBUG_DIR = os.path.join(OUTPUT_DIR, "debug")
 

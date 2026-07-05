@@ -1,11 +1,11 @@
-"""
-image_generator.py — ASTRA v2 core image processing functions.
-Module 1 (bbox marking) + Module 2 (depth heatmap) được tách riêng,
-mỗi hàm stateless, nhận record dict từ test_objects_last.json.
+﻿"""
+image_generator.py â€” ASTRA v2 core image processing functions.
+Module 1 (bbox marking) + Module 2 (depth heatmap) Ä‘Æ°á»£c tÃ¡ch riÃªng,
+má»—i hÃ m stateless, nháº­n record dict tá»« test_objects_last.json.
 
-Quy ước xuyên suốt:
-  - depth value càng THẤP = càng GẦN camera
-  - Tất cả bbox coordinates dạng [x1, y1, x2, y2], normalized [0,1] trên width/height
+Quy Æ°á»›c xuyÃªn suá»‘t:
+  - depth value cÃ ng THáº¤P = cÃ ng Gáº¦N camera
+  - Táº¥t cáº£ bbox coordinates dáº¡ng [x1, y1, x2, y2], normalized [0,1] trÃªn width/height
 """
 
 from __future__ import annotations
@@ -34,9 +34,9 @@ from config.pipeline_config import (
 from .module1_ogm import detect_yoloe_objects, load_yoloe_model
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Module 1 — Bbox Marking
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Module 1 â€” Bbox Marking
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def should_run_yoloe(record: dict) -> bool:
     """Confidence gating: only run M1+M2 when extraction is reliable."""
@@ -84,8 +84,8 @@ def _draw_box_outside_label(
     font_size: int,
 ) -> None:
     """
-    Vẽ bbox viền + label đặt PHÍA NGOÀI góc trên-trái box.
-    Không fill bên trong box. Box nhỏ (< 20px) → label đặt cách box 10px bên ngoài.
+    Váº½ bbox viá»n + label Ä‘áº·t PHÃA NGOÃ€I gÃ³c trÃªn-trÃ¡i box.
+    KhÃ´ng fill bÃªn trong box. Box nhá» (< 20px) â†’ label Ä‘áº·t cÃ¡ch box 10px bÃªn ngoÃ i.
     """
     border_color = color
     text_color = (255, 255, 255)
@@ -108,19 +108,19 @@ def _draw_box_outside_label(
     box_h = y2 - y1
     label_h = lh + 4
 
-    # quyết vị trí label: ưu tiên trên-trái box, ra ngoài nếu box quá nhỏ
+    # quyáº¿t vá»‹ trÃ­ label: Æ°u tiÃªn trÃªn-trÃ¡i box, ra ngoÃ i náº¿u box quÃ¡ nhá»
     if box_w >= lw + 8 and box_h >= label_h:
-        # label bên trong góc trên-trái box
+        # label bÃªn trong gÃ³c trÃªn-trÃ¡i box
         lx = x1 + 3
         ly = y1 - label_h - 2
         if ly < 0:
             ly = y1 + 3
     else:
-        # label bên ngoài góc trên-trái, cách box 10px
+        # label bÃªn ngoÃ i gÃ³c trÃªn-trÃ¡i, cÃ¡ch box 10px
         lx = max(0, x1 - lw - 4)
         ly = max(0, y1 - label_h - 10)
 
-    # nền label
+    # ná»n label
     draw.rectangle([lx, ly, lx + lw + 4, ly + label_h], fill=border_color)
     # text
     draw.text((lx + 2, ly + 2), label, fill=text_color, font=font)
@@ -135,18 +135,18 @@ def generate_bbox_image(
     imgsz: int = YOLOE_IMGSZ,
 ) -> tuple[Image.Image, dict]:
     """
-    Module 1 — Detect O1/O2 bang YOLOE-26X, vẽ [1]/[2] lên ảnh.
+    Module 1 â€” Detect O1/O2 bang YOLOE-26X, váº½ [1]/[2] lÃªn áº£nh.
 
     Args:
-        image: PIL.Image gốc (RGB)
-        record: dict từ test_objects_last.json, có keys:
+        image: PIL.Image gá»‘c (RGB)
+        record: dict tá»« test_objects_last.json, cÃ³ keys:
             Object.O1, Object.O2, O2_is_viewer, confidence
         yoloe_model, device: YOLOE-26X model
-        det_threshold: ngưỡng confidence cho detect
+        det_threshold: ngÆ°á»¡ng confidence cho detect
 
     Returns:
         (marked_image, box_info)
-        marked_image: PIL.Image đã vẽ bbox (hoặc ảnh gốc nếu fail)
+        marked_image: PIL.Image Ä‘Ã£ váº½ bbox (hoáº·c áº£nh gá»‘c náº¿u fail)
         box_info: dict {
             "marks_ok": bool,
             "box_o1": [x1,y1,x2,y2] | None,
@@ -167,7 +167,7 @@ def generate_bbox_image(
     # Detect O1
     box_o1, conf_o1 = _detect_single(image, o1_text, yoloe_model, device, det_threshold, imgsz)
 
-    # Detect O2 (chỉ nếu không phải viewer)
+    # Detect O2 (chá»‰ náº¿u khÃ´ng pháº£i viewer)
     box_o2, conf_o2 = None, 0.0
     if not is_viewer:
         box_o2, conf_o2 = _detect_single(image, o2_text, yoloe_model, device, det_threshold, imgsz)
@@ -178,7 +178,7 @@ def generate_bbox_image(
     marks_ok = o1_ok and o2_ok
 
     if not marks_ok:
-        # Fallback: trả ảnh gốc không vẽ gì
+        # Fallback: tráº£ áº£nh gá»‘c khÃ´ng váº½ gÃ¬
         box_info = {
             "marks_ok": False,
             "box_o1": None,
@@ -191,18 +191,18 @@ def generate_bbox_image(
         }
         return image.copy(), box_info
 
-    # Vẽ bbox lên ảnh
+    # Váº½ bbox lÃªn áº£nh
     marked = image.copy()
     draw = ImageDraw.Draw(marked)
 
     font_size = int(min(w, h) * BBOX_FONT_SIZE_RATIO)
     font_size = max(BBOX_MIN_FONT_SIZE, min(BBOX_MAX_FONT_SIZE, font_size))
 
-    # O1 box — màu đỏ, label [1]
+    # O1 box â€” mÃ u Ä‘á», label [1]
     px1, py1, px2, py2 = int(box_o1[0]*w), int(box_o1[1]*h), int(box_o1[2]*w), int(box_o1[3]*h)
     _draw_box_outside_label(draw, px1, py1, px2, py2, "[1]", MARK_COLOR_O1, w, h, font_size)
 
-    # O2 box — màu xanh dương, label [2]
+    # O2 box â€” mÃ u xanh dÆ°Æ¡ng, label [2]
     if not is_viewer and box_o2 is not None:
         px1_o2, py1_o2, px2_o2, py2_o2 = int(box_o2[0]*w), int(box_o2[1]*h), int(box_o2[2]*w), int(box_o2[3]*h)
         _draw_box_outside_label(draw, px1_o2, py1_o2, px2_o2, py2_o2, "[2]", MARK_COLOR_O2, w, h, font_size)
@@ -220,9 +220,9 @@ def generate_bbox_image(
     return marked, box_info
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Module 2 — Depth Heatmap
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Module 2 â€” Depth Heatmap
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def load_depth_model(model_size: str = "small", device: str = "cuda"):
     """Load Depth-Anything-V2 model."""
@@ -249,8 +249,8 @@ def compute_depth_map(
     target_size: int = 518,
 ) -> np.ndarray:
     """
-    Tính depth map từ Depth-Anything-V2.
-    Returns depth_map: 2D numpy array (H, W), giá trị [0,1], nhỏ = gần camera.
+    TÃ­nh depth map tá»« Depth-Anything-V2.
+    Returns depth_map: 2D numpy array (H, W), giÃ¡ trá»‹ [0,1], nhá» = gáº§n camera.
     """
     from torchvision import transforms
 
@@ -263,13 +263,13 @@ def compute_depth_map(
     with torch.no_grad():
         depth = depth_model(img_tensor).squeeze().cpu().numpy()
 
-    # Resize về kích thước gốc
+    # Resize vá» kÃ­ch thÆ°á»›c gá»‘c
     orig_w, orig_h = image.size
     depth_img = Image.fromarray((depth * 255 / depth.max()).astype(np.uint8))
     depth_img = depth_img.resize((orig_w, orig_h), Image.BILINEAR)
     depth_map = np.array(depth_img).astype(np.float32) / 255.0
 
-    # Normalize về [0,1], INVERT: nhỏ = gần camera
+    # Normalize vá» [0,1], INVERT: nhá» = gáº§n camera
     if depth_map.max() > depth_map.min():
         depth_map = (depth_map - depth_map.min()) / (depth_map.max() - depth_map.min())
     return 1.0 - depth_map
@@ -280,7 +280,7 @@ def _mean_depth_in_bbox(
     bbox: Optional[list],
     img_h: int, img_w: int,
 ) -> float:
-    """Tính depth trung bình trong một bbox (normalized coordinates)."""
+    """TÃ­nh depth trung bÃ¬nh trong má»™t bbox (normalized coordinates)."""
     if bbox is None:
         return float(np.median(depth_map))
     x1, y1, x2, y2 = bbox
@@ -302,19 +302,19 @@ def compute_depth_cue(
     model_size: str = "small",
 ) -> tuple[np.ndarray, float, float]:
     """
-    Module 2 (phần 1) — Tính depth map và depth trung bình tại bbox O1/O2.
+    Module 2 (pháº§n 1) â€” TÃ­nh depth map vÃ  depth trung bÃ¬nh táº¡i bbox O1/O2.
 
     Args:
-        image: PIL.Image gốc
-        box_info: dict từ generate_bbox_image(), phải có marks_ok=True
+        image: PIL.Image gá»‘c
+        box_info: dict tá»« generate_bbox_image(), pháº£i cÃ³ marks_ok=True
         depth_model: Depth-Anything-V2 model
         device, model_size
 
     Returns:
         (depth_map, depth_o1, depth_o2)
-        depth_map: 2D numpy (H,W) [0,1], nhỏ = gần camera
+        depth_map: 2D numpy (H,W) [0,1], nhá» = gáº§n camera
         depth_o1: float
-        depth_o2: float (0.0 nếu viewer)
+        depth_o2: float (0.0 náº¿u viewer)
     """
     if depth_model is None:
         depth_model = load_depth_model(model_size, device)
@@ -341,8 +341,8 @@ def depth_relation_text(
     threshold: float = 0.05,
 ) -> str:
     """
-    Sinh depth hint text dựa trên chênh lệch depth.
-    Quy ước: depth thấp = gần camera.
+    Sinh depth hint text dá»±a trÃªn chÃªnh lá»‡ch depth.
+    Quy Æ°á»›c: depth tháº¥p = gáº§n camera.
     """
     diff = depth_o2 - depth_o1
     if abs(diff) < threshold:
@@ -361,7 +361,7 @@ def depth_relation_text(
 
 
 def _colormap_viridis(depth: np.ndarray) -> np.ndarray:
-    """Colorize depth map với viridis colormap (RGB)."""
+    """Colorize depth map vá»›i viridis colormap (RGB)."""
     dm = (depth * 255).astype(np.uint8)
     colored = cv2.applyColorMap(dm, cv2.COLORMAP_VIRIDIS)
     colored = cv2.cvtColor(colored, cv2.COLOR_BGR2RGB)
@@ -369,7 +369,7 @@ def _colormap_viridis(depth: np.ndarray) -> np.ndarray:
 
 
 def _colormap_turbo(depth: np.ndarray) -> np.ndarray:
-    """Colorize depth map với turbo colormap."""
+    """Colorize depth map vá»›i turbo colormap."""
     dm = (depth * 255).astype(np.uint8)
     colored = cv2.applyColorMap(dm, cv2.COLORMAP_TURBO)
     colored = cv2.cvtColor(colored, cv2.COLOR_BGR2RGB)
@@ -393,24 +393,24 @@ def _draw_colorbar_legend(
     font_size: int = 13,
 ) -> np.ndarray:
     """
-    Vẽ colorbar legend góc dưới-phải: dải màu viridis + chữ "Near"/"Far".
-    img: numpy array (H,W,3), trả về numpy array đã vẽ thêm colorbar.
+    Váº½ colorbar legend gÃ³c dÆ°á»›i-pháº£i: dáº£i mÃ u viridis + chá»¯ "Near"/"Far".
+    img: numpy array (H,W,3), tráº£ vá» numpy array Ä‘Ã£ váº½ thÃªm colorbar.
     """
     h, w = img.shape[:2]
 
-    # canvas cho legend nằm riêng
+    # canvas cho legend náº±m riÃªng
     bar_x = w - bar_w - margin
-    bar_y = h - bar_h - margin - 30  # chừa chỗ cho chữ
+    bar_y = h - bar_h - margin - 30  # chá»«a chá»— cho chá»¯
 
-    # tạo gradient viridis cho colorbar
+    # táº¡o gradient viridis cho colorbar
     gradient = np.linspace(0, 1, bar_h).astype(np.float32)
     gradient_2d = np.tile(gradient.reshape(-1, 1), (1, bar_w))
     legend_bar = (colormap_fn(gradient_2d) * 255).astype(np.uint8)
 
-    # paste vào ảnh
+    # paste vÃ o áº£nh
     img[bar_y:bar_y+bar_h, bar_x:bar_x+bar_w] = legend_bar
 
-    # vẽ viền
+    # váº½ viá»n
     cv2.rectangle(img, (bar_x, bar_y), (bar_x+bar_w, bar_y+bar_h), (255,255,255), 1)
 
     # text labels
@@ -419,7 +419,7 @@ def _draw_colorbar_legend(
     except Exception:
         font = 0
 
-    # "Near" bên dưới đầu gần (bottom của bar = giá trị 0 = gần)
+    # "Near" bÃªn dÆ°á»›i Ä‘áº§u gáº§n (bottom cá»§a bar = giÃ¡ trá»‹ 0 = gáº§n)
     near_text = "Near"
     far_text = "Far"
     cv2.putText(img, near_text, (bar_x, bar_y + bar_h + 18),
@@ -439,18 +439,18 @@ def _draw_depth_label(
     thickness: int = 2,
 ) -> np.ndarray:
     """
-    Vẽ text label tại vị trí bbox trên ảnh depth.
+    Váº½ text label táº¡i vá»‹ trÃ­ bbox trÃªn áº£nh depth.
     bbox: [x1,y1,x2,y2] normalized [0,1]
     """
     h, w = img.shape[:2]
     x1, y1, x2, y2 = bbox
     px, py = int(x1 * w), int(y1 * h)
 
-    # đặt text cách góc trên-trái bbox một chút
+    # Ä‘áº·t text cÃ¡ch gÃ³c trÃªn-trÃ¡i bbox má»™t chÃºt
     lx = min(w - 10, max(5, px + 2))
     ly = max(25, py - 5)
 
-    # nền đen mờ
+    # ná»n Ä‘en má»
     text_size, _ = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
     cv2.rectangle(img,
                   (lx - 2, ly - text_size[1] - 2),
@@ -471,17 +471,17 @@ def render_depth_image(
     colormap: str = DEPTH_COLORMAP,
 ) -> Image.Image:
     """
-    Module 2 (phần 2) — Vẽ depth heatmap + colorbar legend + depth labels tại bbox.
+    Module 2 (pháº§n 2) â€” Váº½ depth heatmap + colorbar legend + depth labels táº¡i bbox.
 
     Args:
-        depth_map: 2D numpy (H,W) [0,1], nhỏ = gần camera
-        box_info: dict từ generate_bbox_image()
-        depth_o1, depth_o2: giá trị depth đã tính
-        is_viewer: nếu True, không vẽ label cho [2] (viewer không có tọa độ)
-        colormap: "viridis" hoặc "turbo"
+        depth_map: 2D numpy (H,W) [0,1], nhá» = gáº§n camera
+        box_info: dict tá»« generate_bbox_image()
+        depth_o1, depth_o2: giÃ¡ trá»‹ depth Ä‘Ã£ tÃ­nh
+        is_viewer: náº¿u True, khÃ´ng váº½ label cho [2] (viewer khÃ´ng cÃ³ tá»a Ä‘á»™)
+        colormap: "viridis" hoáº·c "turbo"
 
     Returns:
-        PIL.Image đã vẽ depth heatmap + colorbar + labels
+        PIL.Image Ä‘Ã£ váº½ depth heatmap + colorbar + labels
     """
     colormap_fn = _get_colormap(colormap)
 
@@ -490,25 +490,26 @@ def render_depth_image(
 
     h, w = colored.shape[:2]
 
-    # Colorbar legend góc dưới-phải
+    # Colorbar legend gÃ³c dÆ°á»›i-pháº£i
     bar_w = int(w * COLORBAR_WIDTH_RATIO)
     bar_h = COLORBAR_HEIGHT_PX
     margin = COLORBAR_MARGIN_PX
     colored = _draw_colorbar_legend(colored, colormap_fn, bar_w, bar_h, margin)
 
-    # Depth labels tại vị trí bbox
+    # Depth labels táº¡i vá»‹ trÃ­ bbox
     box_o1 = box_info.get("box_o1")
     box_o2 = box_info.get("box_o2")
 
     label_color = (255, 255, 255)
 
     if box_o1 is not None:
-        label1 = f"[1] depth≈{depth_o1:.2f}"
+        label1 = f"[1] depthâ‰ˆ{depth_o1:.2f}"
         colored = _draw_depth_label(colored, box_o1, label1, label_color)
 
-    # [2] chỉ vẽ nếu không phải viewer (viewer có depth=0.0 nhưng không có tọa độ pixel)
+    # [2] chá»‰ váº½ náº¿u khÃ´ng pháº£i viewer (viewer cÃ³ depth=0.0 nhÆ°ng khÃ´ng cÃ³ tá»a Ä‘á»™ pixel)
     if not is_viewer and box_o2 is not None:
-        label2 = f"[2] depth≈{depth_o2:.2f}"
+        label2 = f"[2] depthâ‰ˆ{depth_o2:.2f}"
         colored = _draw_depth_label(colored, box_o2, label2, label_color)
 
     return Image.fromarray(colored)
+
