@@ -38,7 +38,23 @@ from utils.utils import normalize_relation
 from evaluation.evaluator import evaluate_predictions, save_metrics
 
 ZERO_SHOT_FILE = os.path.join(DATA_DIR, "test.jsonl")
-ZERO_SHOT_IMAGE_DIR = os.path.join(DATA_DIR, "test_images")
+_ZERO_SHOT_IMAGE_CANDIDATES = [
+    os.getenv("ASTRA_ZERO_SHOT_IMAGE_DIR", "").strip(),
+    os.path.join(_REPO_ROOT, "dataset", "images", "test_images"),
+    os.path.join(_REPO_ROOT, "dataset", "images", "COCO2017"),
+    os.path.join(DATA_DIR, "test_images"),
+    os.path.join(_REPO_ROOT, "data", "images", "test_images"),
+    os.path.join(_REPO_ROOT, "data", "images", "COCO2017"),
+]
+ZERO_SHOT_IMAGE_DIRS = [
+    os.path.abspath(path)
+    for path in _ZERO_SHOT_IMAGE_CANDIDATES
+    if path
+]
+ZERO_SHOT_IMAGE_DIR = next(
+    (path for path in ZERO_SHOT_IMAGE_DIRS if os.path.isdir(path)),
+    ZERO_SHOT_IMAGE_DIRS[0],
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -103,13 +119,17 @@ def get_zero_shot_image_path(record: dict) -> str:
         raise ValueError(f"Record {record.get('id')} is missing the 'image' field")
 
     image_name = os.path.basename(image_name)
-    image_path = os.path.join(ZERO_SHOT_IMAGE_DIR, image_name)
-    if not os.path.exists(image_path):
-        raise FileNotFoundError(
-            f"Missing zero-shot image for record {record.get('id')} ({image_name}): "
-            f"{image_path}. Expected images under {ZERO_SHOT_IMAGE_DIR}"
-        )
-    return image_path
+    checked_paths = []
+    for image_dir in ZERO_SHOT_IMAGE_DIRS:
+        image_path = os.path.join(image_dir, image_name)
+        checked_paths.append(image_path)
+        if os.path.exists(image_path):
+            return image_path
+
+    raise FileNotFoundError(
+        f"Missing zero-shot image for record {record.get('id')} ({image_name}). "
+        f"Checked: {checked_paths}"
+    )
 
 
 def build_zero_shot_prompt(record: dict, options: list[str] | None = None) -> str:
