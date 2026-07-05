@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import base64
+import csv
 import inspect
 import json
 import os
@@ -34,6 +35,7 @@ from config.pipeline_config import (
 )
 from models.prompt_v2 import build_prompt, format_options
 from utils.utils import normalize_relation
+from evaluation.evaluator import evaluate_predictions, save_metrics
 
 ZERO_SHOT_FILE = os.path.join(DATA_DIR, "test.jsonl")
 ZERO_SHOT_IMAGE_DIR = os.path.join(DATA_DIR, "test_images")
@@ -125,6 +127,48 @@ def build_zero_shot_prompt(record: dict, options: list[str] | None = None) -> st
         "Answer: (X)"
     )
 
+def get_bbox_image_path(record: dict) -> str:
+    """Return the marked RGB bbox image path for a record."""
+    image_name = record.get("image")
+    if not image_name:
+        raise ValueError(f"Record {record.get('id')} is missing the 'image' field")
+
+    image_name = os.path.basename(image_name)
+    img_path = os.path.join(V2_BBOX_IMAGE_DIR, image_name)
+    if not os.path.exists(img_path):
+        raise FileNotFoundError(
+            f"Missing bbox image for record {record.get('id')} ({image_name}): {img_path}"
+        )
+    return img_path
+
+
+def build_bbox_only_prompt(record: dict, options: list[str] | None = None) -> str:
+    """Build a one-image prompt for bbox-only ablation."""
+    if options is None:
+        options = record.get("options", [])
+
+    objects = record.get("Object", {})
+    o1_name = objects.get("O1", "object [1]") or "object [1]"
+    o2_name = objects.get("O2", "object [2]") or "object [2]"
+    if record.get("O2_is_viewer", False):
+        relation_guidance = (
+            f"[2] represents the current position/viewpoint of {o2_name}. "
+            "Answer where [1] is located relative to [2] from that viewpoint."
+        )
+    else:
+        relation_guidance = "Answer where [1] is located relative to [2]."
+
+    return (
+        "You are given one RGB image of the scene with two detected objects marked.\n"
+        f"[1] = {o1_name}\n"
+        f"[2] = {o2_name}\n\n"
+        f"Spatial relation: {relation_guidance}\n\n"
+        f"Question: {record.get('question', '')}\n\n"
+        "Options:\n"
+        f"{format_options(options)}\n\n"
+        "Think briefly, then answer in exactly this format:\n"
+        "Answer: (X)"
+    )
 
 def generate_permutations(options, n):
     """Generate n unique permutations for ODV."""
@@ -381,6 +425,76 @@ def prepare_requests(records: dict, sids: list[str]) -> list[dict]:
     return requests, request_meta
 
 
+def prepare_bbox_ablation_requests(
+    records: dict,
+    sids: list[str],
+    variant: str,
+    n_perms: int = N_PERMS,
+) -> tuple[list[dict], list[dict]]:
+    """Prepare bbox-only or bbox-depth ablation requests."""
+    if variant not in {"bbox-only", "bbox-depth"}:
+        raise ValueError(f"Unsupported ablation variant: {variant}")
+
+    requests = []
+    request_meta = []
+    use_depth = variant == "bbox-depth"
+
+    for sid in sids:
+        record = records.get(sid, {})
+        options = record.get("options", [])
+
+        if use_depth:
+            img1_path, img2_path = get_v2_image_paths(record)
+        else:
+            img1_path = get_bbox_image_path(record)
+            img2_path = None
+
+        img1 = Image.open(img1_path).convert("RGB")
+        img2 = Image.open(img2_path).convert("RGB") if img2_path else None
+        img1_url = image_to_base64(img1, "JPEG")
+        img2_url = image_to_base64(img2, "JPEG") if img2 is not None else None
+
+        perms = generate_permutations(options, n_perms)
+
+        for perm_idx, perm_opts in enumerate(perms):
+            if use_depth:
+                prompt = build_prompt(
+                    record=record,
+                    marks_ok=True,
+                    depth_o1=0.0,
+                    depth_o2=0.0,
+                    options=perm_opts,
+                )
+            else:
+                prompt = build_bbox_only_prompt(record, options=perm_opts)
+
+            requests.append({
+                "image1_url": img1_url,
+                "image2_url": img2_url,
+                "image1": img1,
+                "image2": img2,
+                "prompt": prompt,
+            })
+
+            request_meta.append({
+                "sid": sid,
+                "image": record.get("image", ""),
+                "perm_idx": perm_idx,
+                "perm_opts": perm_opts,
+                "original_opts": options,
+                "answer": record.get("answer", ""),
+                "question": record.get("question", ""),
+                "marks_ok": True,
+                "depth_ok": use_depth,
+                "depth_o1": 0.0,
+                "depth_o2": 0.0,
+                "relation_text": "",
+                "mode": "ablation",
+                "variant": variant,
+                "images_used": 2 if use_depth else 1,
+            })
+
+    return requests, request_meta
 
 def prepare_zero_shot_requests(records: dict, sids: list[str]) -> tuple[list[dict], list[dict]]:
     """
@@ -476,6 +590,8 @@ def reconstruct_results(request_meta: list, outputs: list[str]) -> list[dict]:
             "depth_o2": m["depth_o2"],
             "relation_text": m["relation_text"],
             "mode": m.get("mode", "astra"),
+            "variant": m.get("variant", m.get("mode", "astra")),
+            "images_used": m.get("images_used", 2 if m.get("depth_ok") else 1),
             "votes": votes,
             "vote_outputs": vote_outputs,
         })
@@ -487,6 +603,141 @@ def reconstruct_results(request_meta: list, outputs: list[str]) -> list[dict]:
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
+
+
+def run_batched_generation(
+    engine: VLMInferenceEngine,
+    requests: list[dict],
+    batch_size: int,
+    desc: str = "[vLLM] batches",
+) -> tuple[list[str], float]:
+    """Run vLLM generation for prepared requests."""
+    total_reqs = len(requests)
+    all_outputs = []
+    t_start = time.time()
+
+    progress = tqdm(
+        range(0, total_reqs, batch_size),
+        total=(total_reqs + batch_size - 1) // batch_size,
+        desc=desc,
+        unit="batch",
+    )
+    for batch_start in progress:
+        batch_end = min(batch_start + batch_size, total_reqs)
+        batch_reqs = requests[batch_start:batch_end]
+
+        outputs = engine.generate_batch(batch_reqs, MAX_NEW_TOKENS)
+        all_outputs.extend(outputs)
+
+        elapsed = time.time() - t_start
+        done = len(all_outputs)
+        rate = done / elapsed if elapsed > 0 else 0
+        eta = (total_reqs - done) / rate if rate > 0 else 0
+        progress.set_postfix({
+            "req": f"{done}/{total_reqs}",
+            "req/s": f"{rate:.1f}",
+            "eta_m": f"{eta / 60:.1f}",
+        })
+
+    return all_outputs, time.time() - t_start
+
+
+def run_ablation_study(
+    engine: VLMInferenceEngine,
+    records: dict,
+    sids: list[str],
+    args,
+) -> dict:
+    """Run bbox-only and bbox-depth ablation variants."""
+    variants = [v.strip() for v in args.variants.split(",") if v.strip()]
+    allowed = {"bbox-only", "bbox-depth"}
+    invalid = [v for v in variants if v not in allowed]
+    if invalid:
+        raise ValueError(f"Unsupported ablation variant(s): {invalid}. Allowed: {sorted(allowed)}")
+
+    output_root = args.ablation_output_dir or os.path.join(args.output_dir, "ablation")
+    os.makedirs(output_root, exist_ok=True)
+    summary = {}
+
+    for variant in variants:
+        variant_dir = os.path.join(output_root, variant)
+        results_file = os.path.join(variant_dir, "results.jsonl")
+        metrics_file = os.path.join(variant_dir, "metrics.json")
+        os.makedirs(variant_dir, exist_ok=True)
+
+        print(f"\n[ablation] Variant: {variant}")
+        requests, request_meta = prepare_bbox_ablation_requests(records, sids, variant, N_PERMS)
+        print(f"[ablation] {len(requests)} requests prepared")
+
+        outputs, elapsed = run_batched_generation(
+            engine,
+            requests,
+            args.batch_size,
+            desc=f"[vLLM] {variant}",
+        )
+        results, correct_count = reconstruct_results(request_meta, outputs)
+        save_jsonl(results_file, results)
+
+        metrics = compact_metrics(results)
+        save_metrics(metrics, metrics_file)
+        summary[variant] = metrics
+
+        total = len(results)
+        acc = correct_count / total if total else 0.0
+        req_rate = len(requests) / elapsed if elapsed > 0 else 0.0
+        print(
+            f"[ablation] {variant}: {correct_count}/{total} correct "
+            f"({acc:.1%}) | {req_rate:.1f} req/s"
+        )
+        print(f"[ablation] Results: {results_file}")
+        print(f"[ablation] Metrics: {metrics_file}")
+
+    save_ablation_summary(summary, output_root)
+    return summary
+
+
+def compact_metrics(results: list[dict]) -> dict:
+    """Return the ablation metric names requested in the paper table."""
+    metrics = evaluate_predictions(results)
+    per_axis = metrics.get("per_axis", {}) if metrics else {}
+    return {
+        "P": float(metrics.get("macro_precision", 0.0)) if metrics else 0.0,
+        "R": float(metrics.get("macro_recall", 0.0)) if metrics else 0.0,
+        "Acc": float(metrics.get("overall_acc", 0.0)) if metrics else 0.0,
+        "F1": float(metrics.get("macro_f1", 0.0)) if metrics else 0.0,
+        "Ax": float(per_axis.get("x", 0.0)),
+        "Ay": float(per_axis.get("y", 0.0)),
+        "Az": float(per_axis.get("z", 0.0)),
+        "total": int(metrics.get("total", 0)) if metrics else 0,
+        "correct": int(metrics.get("correct", 0)) if metrics else 0,
+    }
+
+
+def save_jsonl(path: str, rows: list[dict]) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def save_ablation_summary(summary: dict, output_dir: str) -> None:
+    os.makedirs(output_dir, exist_ok=True)
+    summary_json = os.path.join(output_dir, "summary.json")
+    with open(summary_json, "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+
+    summary_csv = os.path.join(output_dir, "summary.csv")
+    fieldnames = ["variant", "P", "R", "Acc", "F1", "Ax", "Ay", "Az", "correct", "total"]
+    with open(summary_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for variant, metrics in summary.items():
+            row = {"variant": variant}
+            row.update(metrics)
+            writer.writerow(row)
+
+    print(f"[ablation] Summary: {summary_json}")
+    print(f"[ablation] CSV:     {summary_csv}")
 def main():
     parser = argparse.ArgumentParser(
         description="ASTRA v2 Step 3: vLLM batch inference với ODV voting"
@@ -499,6 +750,12 @@ def main():
     parser.add_argument("--max-samples", type=int, default=0,
                         help="0 = chạy tất cả")
     parser.add_argument("--output-dir", default=VLM_OUTPUT_DIR)
+    parser.add_argument("--ablation", action="store_true",
+                        help="Run ablation study: bbox-only vs bbox-depth")
+    parser.add_argument("--variants", default="bbox-only,bbox-depth",
+                        help="Comma-separated ablation variants: bbox-only,bbox-depth")
+    parser.add_argument("--ablation-output-dir", default=None,
+                        help="Ablation output dir; default: <output-dir>/ablation")
     parser.add_argument("--tensor-parallel-size", "--tp", type=int, default=1)
     parser.add_argument("--max-model-len", type=int, default=8192)
     parser.add_argument("--gpu-memory-utilization", "--gpu-mem", type=float, default=0.85)
@@ -516,7 +773,10 @@ def main():
     output_file = os.path.join(args.output_dir, "results.jsonl")
 
     # Load data
-    if args.mode == "zero-shot":
+    if args.ablation:
+        records = load_all_data()
+        print(f"[vLLM] Mode: ablation | data: {EXTRACTION_FILE}")
+    elif args.mode == "zero-shot":
         records = load_jsonl_data(ZERO_SHOT_FILE)
         print(f"[vLLM] Mode: zero-shot | data: {ZERO_SHOT_FILE}")
         print(f"[vLLM] Zero-shot image dir: {ZERO_SHOT_IMAGE_DIR}")
@@ -529,7 +789,7 @@ def main():
         sids = sids[:args.max_samples]
     # Resume: đọc kết quả cũ, xác định sids đã chạy
     done_sids = set()
-    if args.resume and os.path.exists(output_file):
+    if args.resume and not args.ablation and os.path.exists(output_file):
         with open(output_file, "r", encoding="utf-8") as f:
             for line in f:
                 r = json.loads(line)
@@ -551,6 +811,10 @@ def main():
         max_model_len=args.max_model_len,
         gpu_memory_utilization=args.gpu_memory_utilization,
     )
+
+    if args.ablation:
+        run_ablation_study(engine, records, sids, args)
+        return
 
     # Prepare batch requests
     print("[vLLM] Preparing requests...")
@@ -593,7 +857,7 @@ def main():
     results, correct_count = reconstruct_results(request_meta, all_outputs)
 
     # Merge with existing results if resuming
-    if args.resume and os.path.exists(output_file):
+    if args.resume and not args.ablation and os.path.exists(output_file):
         existing = []
         with open(output_file, "r", encoding="utf-8") as f:
             for line in f:
