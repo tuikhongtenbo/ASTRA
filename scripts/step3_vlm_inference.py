@@ -25,6 +25,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from PIL import Image
+from tqdm import tqdm
 
 from config.pipeline_config import (
     EXTRACTION_FILE, V2_BBOX_IMAGE_DIR, V2_DEPTH_BBOX_IMAGE_DIR,
@@ -427,10 +428,15 @@ def main():
     all_outputs = []
     t_start = time.time()
 
-    for batch_start in range(0, total_reqs, args.batch_size):
+    progress = tqdm(
+        range(0, total_reqs, args.batch_size),
+        total=(total_reqs + args.batch_size - 1) // args.batch_size,
+        desc="[vLLM] batches",
+        unit="batch",
+    )
+    for batch_start in progress:
         batch_end = min(batch_start + args.batch_size, total_reqs)
         batch_reqs = requests[batch_start:batch_end]
-        batch_meta = request_meta[batch_start:batch_end]
 
         outputs = engine.generate_batch(batch_reqs, MAX_NEW_TOKENS)
         all_outputs.extend(outputs)
@@ -439,8 +445,11 @@ def main():
         done = len(all_outputs)
         rate = done / elapsed if elapsed > 0 else 0
         eta = (total_reqs - done) / rate if rate > 0 else 0
-        print(f"[vLLM]  batch {batch_start}-{batch_end} / {total_reqs}  "
-              f"({done}/{total_reqs})  {rate:.1f} req/s  ETA={eta/60:.1f}m")
+        progress.set_postfix({
+            "req": f"{done}/{total_reqs}",
+            "req/s": f"{rate:.1f}",
+            "eta_m": f"{eta / 60:.1f}",
+        })
 
     # Reconstruct results (per-sample, ODV vote)
     print("[vLLM] Reconstructing results & voting...")
