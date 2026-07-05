@@ -213,7 +213,6 @@ class VLMInferenceEngine:
         Returns:
             list of generated strings (cùng thứ tự với requests)
         """
-        from vllm.distributed.parallel_utils import ParallelState
         from vllm.sampling_params import SamplingParams
 
         messages_list = [
