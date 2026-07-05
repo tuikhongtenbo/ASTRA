@@ -698,7 +698,15 @@ def run_ablation_study(
 
 def compact_metrics(results: list[dict]) -> dict:
     """Return the ablation metric names requested in the paper table."""
-    metrics = evaluate_predictions(results)
+    metric_rows = []
+    for row in results:
+        metric_row = dict(row)
+        votes = metric_row.get("votes", [])
+        if votes and not any(v for v in votes):
+            metric_row["votes"] = []
+        metric_rows.append(metric_row)
+
+    metrics = evaluate_predictions(metric_rows)
     per_axis = metrics.get("per_axis", {}) if metrics else {}
     return {
         "P": float(metrics.get("macro_precision", 0.0)) if metrics else 0.0,
