@@ -507,7 +507,11 @@ def main():
     parser.add_argument("--resume", action="store_true",
                         help="Đọc kết quả cũ, bỏ qua những sample đã chạy xong")
     args = parser.parse_args()
-
+    if args.model.strip().lower() in {"zero-shot", "zeroshot", "zero_shot"}:
+        parser.error(
+            "zero-shot is an inference mode, not a model. "
+            "Use: --mode zero-shot --model Qwen3-VL-2B"
+        )
     os.makedirs(args.output_dir, exist_ok=True)
     output_file = os.path.join(args.output_dir, "results.jsonl")
 

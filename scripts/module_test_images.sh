@@ -7,7 +7,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DOWNLOAD_DIR="${REPO_ROOT}/downloads"
 ZIP_PATH="${DOWNLOAD_DIR}/coco2017test.zip"
 EXTRACT_DIR="${DOWNLOAD_DIR}/coco2017test"
-DATASET_DIR="${REPO_ROOT}/dataset"
+DATASET_DIR="${REPO_ROOT}/dataset/data"
 
 mkdir -p "${DOWNLOAD_DIR}" "${DATASET_DIR}"
 
