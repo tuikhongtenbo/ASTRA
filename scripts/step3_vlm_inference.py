@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import base64
+import inspect
 import json
 import os
 import random
@@ -192,11 +193,11 @@ class VLMInferenceEngine:
             ]
         return [{"role": "user", "content": content}]
 
-    def _to_mm_data(self, image1_url: str, image2_url: str | None) -> dict | None:
-        """Build mm_data dict cho vLLM multi-modal."""
-        if image2_url is not None:
-            return {"image": [image1_url, image2_url]}
-        return {"image": image1_url}
+    def _to_mm_data(self, image1, image2=None) -> dict | None:
+        """Build mm_data dict for vLLM multi-modal inputs."""
+        if image2 is not None:
+            return {"image": [image1, image2]}
+        return {"image": image1}
 
     def generate_batch(self, requests: list[dict],
                        max_new_tokens: int = MAX_NEW_TOKENS) -> list[str]:
@@ -220,7 +221,10 @@ class VLMInferenceEngine:
             for r in requests
         ]
         mm_data_list = [
-            self._to_mm_data(r["image1_url"], r.get("image2_url"))
+            self._to_mm_data(
+                r.get("image1", r["image1_url"]),
+                r.get("image2", r.get("image2_url")),
+            )
             for r in requests
         ]
 
@@ -230,17 +234,34 @@ class VLMInferenceEngine:
             for m in messages_list
         ]
 
-        sampling_params = SamplingParams(
-            max_tokens=max_new_tokens,
-            temperature=0.0,
-            stop_strings=["<|im_end|>", "<|endoftext|>"],
-        )
+        stop_sequences = ["<|im_end|>", "<|endoftext|>"]
+        sampling_kwargs = {
+            "max_tokens": max_new_tokens,
+            "temperature": 0.0,
+        }
+        sampling_sig = inspect.signature(SamplingParams).parameters
+        if "stop" in sampling_sig:
+            sampling_kwargs["stop"] = stop_sequences
+        elif "stop_strings" in sampling_sig:
+            sampling_kwargs["stop_strings"] = stop_sequences
+        sampling_params = SamplingParams(**sampling_kwargs)
 
-        outputs = self.llm.generate(
-            prompt_list,
-            sampling_params=sampling_params,
-            multi_modal_data=mm_data_list,
-        )
+        generate_sig = inspect.signature(self.llm.generate).parameters
+        if "multi_modal_data" in generate_sig:
+            outputs = self.llm.generate(
+                prompt_list,
+                sampling_params=sampling_params,
+                multi_modal_data=mm_data_list,
+            )
+        else:
+            prompt_inputs = [
+                {"prompt": prompt, "multi_modal_data": mm_data}
+                for prompt, mm_data in zip(prompt_list, mm_data_list)
+            ]
+            outputs = self.llm.generate(
+                prompt_inputs,
+                sampling_params=sampling_params,
+            )
 
         results = []
         for output in outputs:
@@ -285,6 +306,8 @@ def prepare_requests(records: dict, sids: list[str]) -> list[dict]:
             requests.append({
                 "image1_url": img1_url,
                 "image2_url": img2_url,
+                "image1": img1,
+                "image2": img2,
                 "prompt": p,
             })
 
